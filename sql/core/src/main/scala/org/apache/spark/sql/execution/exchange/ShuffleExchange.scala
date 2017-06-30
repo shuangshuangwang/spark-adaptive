@@ -127,6 +127,21 @@ case class ShuffleExchange(
     }
     cachedShuffleRDD
   }
+
+  private var submittedStageFuture: SimpleFutureAction[MapOutputStatistics] = null
+
+  def eagerExecute(): SimpleFutureAction[MapOutputStatistics] = {
+    if (submittedStageFuture == null) {
+      val shuffleDependency = prepareShuffleDependency()
+      if (shuffleDependency.rdd.partitions.length != 0) {
+        // submitMapStage does not accept RDD with 0 partition.
+        // So, we will not submit this dependency.
+        submittedStageFuture = sqlContext.sparkContext.submitMapStage(shuffleDependency)
+        cachedShuffleRDD = preparePostShuffleRDD(shuffleDependency)
+      }
+    }
+    submittedStageFuture
+  }
 }
 
 object ShuffleExchange {
