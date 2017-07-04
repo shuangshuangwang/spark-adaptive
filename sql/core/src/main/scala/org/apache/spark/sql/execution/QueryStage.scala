@@ -27,11 +27,26 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.Attribute
 import org.apache.spark.sql.catalyst.rules.Rule
-import org.apache.spark.sql.execution.exchange.ShuffleExchange
+import org.apache.spark.sql.execution.exchange.{ExchangeCoordinator, ShuffleExchange}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.util.ThreadUtils
 
-case class QueryStage(child: SparkPlan, childStages: Seq[QueryStage]) extends UnaryExecNode {
+/**
+ * QueryStageInput is the leaf node of a QueryStage and is used to hide its child stage.
+ */
+case class QueryStageInput(childStage: QueryStage) extends LeafExecNode {
+
+  var specifiedPartitionStartIndices: Option[Array[Int]] = None
+
+  override def output: Seq[Attribute] = childStage.output
+
+  override def doExecute(): RDD[InternalRow] = {
+    val childRDD = childStage.doExecute().asInstanceOf[ShuffledRowRDD]
+    new ShuffledRowRDD(childRDD.dependency, specifiedPartitionStartIndices)
+  }
+}
+
+case class QueryStage(child: SparkPlan, stageInputs: Seq[QueryStageInput]) extends UnaryExecNode {
 
   override def output: Seq[Attribute] = child.output
 
@@ -46,6 +61,7 @@ case class QueryStage(child: SparkPlan, childStages: Seq[QueryStage]) extends Un
     if (cachedRDD == null) {
       // 1. execute childStages
       // Use a thread pool to avoid blocking on one child stage.
+      val childStages = stageInputs.map(_.childStage)
       val mapStageThreadPool =
         ThreadUtils.newDaemonFixedThreadPool(childStages.length, "adaptive-submit-stage-pool")
       var submitStageTasks = mutable.ArrayBuffer[Future[_]]()
@@ -59,22 +75,36 @@ case class QueryStage(child: SparkPlan, childStages: Seq[QueryStage]) extends Un
         })
       }
       submitStageTasks.foreach(_.get())
+      mapStageThreadPool.shutdown()
+      val childMapOutputStatistics = childStages.map(_.mapOutputStatistics).toArray
 
       // 2. optimize join in this stage
 
-      // 3. execute plan in this stage
-      child match {
+
+      // 3. determine reducer number
+      val minNumPostShufflePartitions =
+        if (conf.minNumPostShufflePartitions > 0) Some(conf.minNumPostShufflePartitions) else None
+
+      val exchangeCoordinator = new ExchangeCoordinator(
+        conf.targetPostShuffleInputSize,
+        minNumPostShufflePartitions)
+      val partitionStartIndices =
+        exchangeCoordinator.estimatePartitionStartIndices(childMapOutputStatistics)
+      stageInputs.foreach(_.specifiedPartitionStartIndices = Some(partitionStartIndices))
+
+      // 4. execute plan in this stage
+      val afterCodegen = CollapseCodegenStages(sqlContext.conf).apply(child)
+      afterCodegen match {
         case exchange: ShuffleExchange =>
           // submit map stage and wait
-          val submittedStage = exchange.eagerExecute()
-          mapOutputStatistics = submittedStage.get()
+          cachedRDD = exchange.eagerExecute()
+          mapOutputStatistics = exchange.mapOutputStatistics
         case _ => // last stage
+          cachedRDD = child.doExecute()
       }
-      cachedRDD = child.doExecute()
     }
     cachedRDD
   }
-
 }
 
 case class PlanQueryStage(conf: SQLConf) extends Rule[SparkPlan] {
@@ -90,23 +120,28 @@ case class PlanQueryStage(conf: SQLConf) extends Rule[SparkPlan] {
   //    insertQueryStage(plan)
   //  }
 
-  def findChildStages(
+  def findStageInputs(
     plan: SparkPlan,
-    childStages: ArrayBuffer[QueryStage]): Unit = plan match {
-    case stage: QueryStage => childStages += stage
+    stageInputs: ArrayBuffer[QueryStageInput]): Unit = plan match {
+    case stage: QueryStageInput => stageInputs += stage
     case operator: SparkPlan =>
-      operator.children.foreach(c => findChildStages(c, childStages))
+      operator.children.foreach(c => findStageInputs(c, stageInputs))
   }
 
   def apply(plan: SparkPlan): SparkPlan = {
     if (!conf.adaptiveExecutionEnabled) {
       return plan
     }
+
     plan.transformUp {
       case operator: ShuffleExchange =>
-        val childStages = new ArrayBuffer[QueryStage]()
-        findChildStages(operator, childStages)
-        QueryStage(operator, childStages)
+        val queryStageInputs = new ArrayBuffer[QueryStageInput]()
+        findStageInputs(operator, queryStageInputs)
+        QueryStageInput(QueryStage(operator, queryStageInputs))
     }
+
+    val stageInputs = new ArrayBuffer[QueryStageInput]()
+    findStageInputs(plan, stageInputs)
+    QueryStage(plan, stageInputs)
   }
 }
