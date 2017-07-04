@@ -100,7 +100,7 @@ case class QueryStage(child: SparkPlan, stageInputs: Seq[QueryStageInput]) exten
           cachedRDD = exchange.eagerExecute()
           mapOutputStatistics = exchange.mapOutputStatistics
         case _ => // last stage
-          cachedRDD = child.doExecute()
+          cachedRDD = child.execute()
       }
     }
     cachedRDD
