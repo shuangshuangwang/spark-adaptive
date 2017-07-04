@@ -28,6 +28,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen._
 import org.apache.spark.sql.catalyst.plans.physical._
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.{DecimalType, StringType, StructType}
 import org.apache.spark.unsafe.KVIterator
 import org.apache.spark.util.Utils
@@ -882,6 +883,16 @@ case class HashAggregateExec(
        $updateRowInUnsafeRowMap
      }
      """
+  }
+
+  override def computeStats(conf: SQLConf): Statistics = {
+    if (groupingExpressions.isEmpty) {
+      // Assign a generic overhead for a row object
+      val sizeInBytes = 8 + output.map(_.dataType.defaultSize).sum
+      Statistics(sizeInBytes)
+    } else {
+      super.computeStats(conf)
+    }
   }
 
   override def verboseString: String = toString(verbose = true)

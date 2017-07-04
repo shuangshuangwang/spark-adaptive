@@ -30,6 +30,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.LazilyGeneratedOrdering
 import org.apache.spark.sql.catalyst.plans.physical._
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.metric.SQLMetrics
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.util.MutablePair
 
 /**
@@ -122,6 +123,15 @@ case class ShuffleExchange(
       }
     }
     cachedShuffleRDD
+  }
+
+  override def computeStats(conf: SQLConf): Statistics = {
+    if (_mapOutputStatistics != null) {
+      val sizeInBytes = _mapOutputStatistics.bytesByPartitionId.sum
+      Statistics(sizeInBytes = sizeInBytes)
+    } else {
+      super.computeStats(conf)
+    }
   }
 }
 

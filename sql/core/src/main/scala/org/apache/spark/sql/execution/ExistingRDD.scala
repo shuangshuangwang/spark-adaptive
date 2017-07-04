@@ -23,8 +23,11 @@ import org.apache.spark.sql.catalyst.{CatalystTypeConverters, InternalRow}
 import org.apache.spark.sql.catalyst.analysis.MultiInstanceRelation
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.plans.logical._
+import org.apache.spark.sql.catalyst.plans.logical.{Statistics => LogicalPlanStatistics}
 import org.apache.spark.sql.catalyst.plans.physical.{Partitioning, UnknownPartitioning}
+import org.apache.spark.sql.execution.{Statistics => PhsicalPlanStatistics}
 import org.apache.spark.sql.execution.metric.SQLMetrics
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.util.Utils
 
@@ -88,7 +91,7 @@ case class ExternalRDD[T](
 
   override protected def stringArgs: Iterator[Any] = Iterator(output)
 
-  @transient override def computeStats: Statistics = Statistics(
+  @transient override def computeStats: LogicalPlanStatistics = LogicalPlanStatistics(
     // TODO: Instead of returning a default value here, find a way to return a meaningful size
     // estimate for RDDs. See PR 1238 for more discussions.
     sizeInBytes = BigInt(session.sessionState.conf.defaultSizeInBytes)
@@ -118,6 +121,13 @@ case class ExternalRDDScanExec[T](
   override def simpleString: String = {
     s"Scan $nodeName${output.mkString("[", ",", "]")}"
   }
+
+  @transient override def computeStats(conf: SQLConf): PhsicalPlanStatistics =
+    PhsicalPlanStatistics(
+      // TODO: Instead of returning a default value here, find a way to return a meaningful size
+      // estimate for RDDs. See PR 1238 for more discussions.
+      sizeInBytes = BigInt(conf.defaultSizeInBytes)
+    )
 }
 
 /** Logical plan node for scanning data from an RDD of InternalRow. */
@@ -156,7 +166,7 @@ case class LogicalRDD(
 
   override protected def stringArgs: Iterator[Any] = Iterator(output)
 
-  @transient override def computeStats: Statistics = Statistics(
+  @transient override def computeStats: LogicalPlanStatistics = LogicalPlanStatistics(
     // TODO: Instead of returning a default value here, find a way to return a meaningful size
     // estimate for RDDs. See PR 1238 for more discussions.
     sizeInBytes = BigInt(session.sessionState.conf.defaultSizeInBytes)
@@ -189,4 +199,11 @@ case class RDDScanExec(
   override def simpleString: String = {
     s"Scan $nodeName${Utils.truncatedString(output, "[", ",", "]")}"
   }
+
+  @transient override def computeStats(conf: SQLConf): PhsicalPlanStatistics =
+    PhsicalPlanStatistics(
+      // TODO: Instead of returning a default value here, find a way to return a meaningful size
+      // estimate for RDDs. See PR 1238 for more discussions.
+      sizeInBytes = BigInt(conf.defaultSizeInBytes)
+    )
 }
