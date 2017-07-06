@@ -141,7 +141,7 @@ case class RowDataSourceScanExec(
   override def preCanonicalized: SparkPlan =
     copy(rdd = null, outputPartitioning = null, metastoreTableIdentifier = None)
 
-  override def computeStats(conf: SQLConf): Statistics = {
+  override def computeStats: Statistics = {
     Statistics(sizeInBytes = relation.sizeInBytes)
   }
 }
@@ -528,7 +528,7 @@ case class FileSourceScanExec(
       None)
   }
 
-  override def computeStats(conf: SQLConf): Statistics = {
+  override def computeStats: Statistics = {
     Statistics(sizeInBytes = relation.sizeInBytes)
   }
 }

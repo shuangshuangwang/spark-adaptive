@@ -885,13 +885,13 @@ case class HashAggregateExec(
      """
   }
 
-  override def computeStats(conf: SQLConf): Statistics = {
+  override def computeStats: Statistics = {
     if (groupingExpressions.isEmpty) {
       // Assign a generic overhead for a row object
       val sizeInBytes = 8 + output.map(_.dataType.defaultSize).sum
       Statistics(sizeInBytes)
     } else {
-      super.computeStats(conf)
+      super.computeStats
     }
   }
 

@@ -125,12 +125,12 @@ case class ShuffleExchange(
     cachedShuffleRDD
   }
 
-  override def computeStats(conf: SQLConf): Statistics = {
+  override def computeStats: Statistics = {
     if (_mapOutputStatistics != null) {
       val sizeInBytes = _mapOutputStatistics.bytesByPartitionId.sum
       Statistics(sizeInBytes = sizeInBytes)
     } else {
-      super.computeStats(conf)
+      super.computeStats
     }
   }
 }

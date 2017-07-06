@@ -406,8 +406,8 @@ abstract class SparkPlan extends QueryPlan[SparkPlan] with Logging with Serializ
    * first time. If the configuration changes, the cache can be invalidated by calling
    * [[invalidateStatsCache()]].
    */
-  final def stats(conf: SQLConf): Statistics = statsCache.getOrElse {
-    statsCache = Some(computeStats(conf))
+  final def stats: Statistics = statsCache.getOrElse {
+    statsCache = Some(computeStats)
     statsCache.get
   }
 
@@ -422,11 +422,11 @@ abstract class SparkPlan extends QueryPlan[SparkPlan] with Logging with Serializ
    * cardinality is the product of all child plan's cardinality, i.e. applies in the case
    * of cartesian joins.
     */
-  protected def computeStats(conf: SQLConf): Statistics = {
+  protected def computeStats: Statistics = {
     if (children.isEmpty) {
       throw new UnsupportedOperationException(s"LeafExecNode $nodeName must implement statistics.")
     }
-    Statistics(sizeInBytes = children.map(_.stats(conf).sizeInBytes).product)
+    Statistics(sizeInBytes = children.map(_.stats.sizeInBytes).product)
   }
 }
 
@@ -453,13 +453,13 @@ trait UnaryExecNode extends SparkPlan {
 
   override final def children: Seq[SparkPlan] = child :: Nil
 
-  override def computeStats(conf: SQLConf): Statistics = {
+  override def computeStats: Statistics = {
     // There should be some overhead in Row object, the size should not be zero when there is
     // no columns, this help to prevent divide-by-zero error.
     val childRowSize = child.output.map(_.dataType.defaultSize).sum + 8
     val outputRowSize = output.map(_.dataType.defaultSize).sum + 8
     // Assume there will be the same number of rows as child has.
-    var sizeInBytes = (child.stats(conf).sizeInBytes * outputRowSize) / childRowSize
+    var sizeInBytes = (child.stats.sizeInBytes * outputRowSize) / childRowSize
     if (sizeInBytes == 0) {
       // sizeInBytes can't be zero, or sizeInBytes of BinaryNode will also be zero
       // (product of children).

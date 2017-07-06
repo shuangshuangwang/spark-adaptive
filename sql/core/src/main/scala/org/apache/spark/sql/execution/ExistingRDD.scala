@@ -122,7 +122,7 @@ case class ExternalRDDScanExec[T](
     s"Scan $nodeName${output.mkString("[", ",", "]")}"
   }
 
-  @transient override def computeStats(conf: SQLConf): PhsicalPlanStatistics =
+  @transient override def computeStats: PhsicalPlanStatistics =
     PhsicalPlanStatistics(
       // TODO: Instead of returning a default value here, find a way to return a meaningful size
       // estimate for RDDs. See PR 1238 for more discussions.
@@ -200,7 +200,7 @@ case class RDDScanExec(
     s"Scan $nodeName${Utils.truncatedString(output, "[", ",", "]")}"
   }
 
-  @transient override def computeStats(conf: SQLConf): PhsicalPlanStatistics =
+  @transient override def computeStats: PhsicalPlanStatistics =
     PhsicalPlanStatistics(
       // TODO: Instead of returning a default value here, find a way to return a meaningful size
       // estimate for RDDs. See PR 1238 for more discussions.

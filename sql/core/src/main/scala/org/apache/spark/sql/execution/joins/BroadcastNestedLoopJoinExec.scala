@@ -376,13 +376,13 @@ case class BroadcastNestedLoopJoinExec(
     }
   }
 
-  override def computeStats(conf: SQLConf): Statistics = {
+  override def computeStats: Statistics = {
     joinType match {
       case LeftAnti | LeftSemi =>
         // LeftSemi and LeftAnti won't ever be bigger than left
-        left.stats(conf)
+        left.stats
       case _ =>
-        super.computeStats(conf)
+        super.computeStats
     }
   }
 }
