@@ -75,7 +75,7 @@ case class QueryStage(var child: SparkPlan) extends UnaryExecNode {
 
   override def doExecute(): RDD[InternalRow] = {
     if (cachedRDD == null) {
-      // 1. execute childStages
+      // 1. Execute childStages
       // Use a thread pool to avoid blocking on one child stage.
       val childStages = queryStageInputs.map(_.childStage)
       val mapStageThreadPool =
@@ -93,10 +93,10 @@ case class QueryStage(var child: SparkPlan) extends UnaryExecNode {
       submitStageTasks.foreach(_.get())
       mapStageThreadPool.shutdown()
 
-      // 2. optimize join in this stage
+      // 2. Optimize join in this stage based on previous stages' statistics.
       OptimizeJoin(conf).apply(this)
 
-      // 3. determine reducer number
+      // 3. Determine reducer number
       val childMapOutputStatistics = childStages.map(_.mapOutputStatistics)
         .filter(_ != null).toArray
       if (childMapOutputStatistics.length > 0) {
@@ -111,7 +111,7 @@ case class QueryStage(var child: SparkPlan) extends UnaryExecNode {
         queryStageInputs.foreach(_.specifiedPartitionStartIndices = Some(partitionStartIndices))
       }
 
-      // 4. execute plan in this stage
+      // 4. Execute plan in this stage
       val afterCodegen = CollapseCodegenStages(sqlContext.conf).apply(child)
       afterCodegen match {
         case exchange: ShuffleExchange =>
@@ -140,12 +140,7 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
   }
 
   private def canBroadcast(plan: SparkPlan): Boolean = {
-    plan match {
-      case rse: ReusedExchangeExec => canBroadcast(rse.child)
-      case plan =>
-        plan.stats.sizeInBytes >= 0 &&
-          plan.stats.sizeInBytes <= conf.autoBroadcastJoinThreshold
-    }
+    plan.stats.sizeInBytes >= 0 && plan.stats.sizeInBytes <= conf.autoBroadcastJoinThreshold
   }
 
   private def removeSort(plan: SparkPlan): SparkPlan = {
