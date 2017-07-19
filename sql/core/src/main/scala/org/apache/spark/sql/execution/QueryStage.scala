@@ -24,8 +24,9 @@ import scala.collection.mutable
 import org.apache.spark.MapOutputStatistics
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.Attribute
+import org.apache.spark.sql.catalyst.expressions.{Attribute, SortOrder}
 import org.apache.spark.sql.catalyst.plans._
+import org.apache.spark.sql.catalyst.plans.physical.{Partitioning, UnknownPartitioning}
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.execution.exchange._
 import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, BuildLeft, BuildRight, SortMergeJoinExec}
@@ -37,19 +38,29 @@ import org.apache.spark.util.ThreadUtils
  */
 case class QueryStageInput(
     childStage: QueryStage,
-    var isLocalShuffle: Boolean = false) extends LeafExecNode {
+    var isLocalShuffle: Boolean = false,
+    var specifiedPartitionStartIndices: Option[Array[Int]] = None)
+  extends LeafExecNode {
 
-  var specifiedPartitionStartIndices: Option[Array[Int]] = None
+  override def outputPartitioning: Partitioning = specifiedPartitionStartIndices.map {
+    indices => UnknownPartitioning(indices.length)
+  }.getOrElse(childStage.outputPartitioning)
 
   override def output: Seq[Attribute] = childStage.output
 
+  override def outputOrdering: Seq[SortOrder] = childStage.outputOrdering
+
   override def doExecute(): RDD[InternalRow] = {
-    val childRDD = childStage.doExecute().asInstanceOf[ShuffledRowRDD]
+    val childRDD = childStage.execute().asInstanceOf[ShuffledRowRDD]
     if (isLocalShuffle) {
       new LocalShuffledRowRDD(childRDD.dependency)
     } else {
       new ShuffledRowRDD(childRDD.dependency, specifiedPartitionStartIndices)
     }
+  }
+
+  override def computeStats: Statistics = {
+    childStage.stats
   }
 }
 
@@ -73,25 +84,31 @@ case class QueryStage(var child: SparkPlan) extends UnaryExecNode {
 
   override def output: Seq[Attribute] = child.output
 
+  override def outputPartitioning: Partitioning = child.outputPartitioning
+
+  override def outputOrdering: Seq[SortOrder] = child.outputOrdering
+
   override def doExecute(): RDD[InternalRow] = {
     if (cachedRDD == null) {
       // 1. Execute childStages
       // Use a thread pool to avoid blocking on one child stage.
       val childStages = queryStageInputs.map(_.childStage)
-      val mapStageThreadPool =
-        ThreadUtils.newDaemonFixedThreadPool(childStages.length, "adaptive-submit-stage-pool")
-      var submitStageTasks = mutable.ArrayBuffer[Future[_]]()
-      childStages.foreach { childStage =>
-        submitStageTasks += mapStageThreadPool.submit(new Runnable {
-          override def run(): Unit = {
-            SQLExecution.withExecutionId(sqlContext.sparkContext, executionId) {
-              childStage.execute()
+      if (childStages.length > 0) {
+        val mapStageThreadPool =
+          ThreadUtils.newDaemonFixedThreadPool(childStages.length, "adaptive-submit-stage-pool")
+        var submitStageTasks = mutable.ArrayBuffer[Future[_]]()
+        childStages.foreach { childStage =>
+          submitStageTasks += mapStageThreadPool.submit(new Runnable {
+            override def run(): Unit = {
+              SQLExecution.withExecutionId(sqlContext.sparkContext, executionId) {
+                childStage.execute()
+              }
             }
-          }
-        })
+          })
+        }
+        submitStageTasks.foreach(_.get())
+        mapStageThreadPool.shutdown()
       }
-      submitStageTasks.foreach(_.get())
-      mapStageThreadPool.shutdown()
 
       // 2. Optimize join in this stage based on previous stages' statistics.
       OptimizeJoin(conf).apply(this)
@@ -167,12 +184,6 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
         val broadcastJoin = BroadcastHashJoinExec(
           leftKeys, rightKeys, joinType, buildSide, condition, removeSort(left), removeSort(right))
 
-        // Set QueryStageInput to return local shuffled RDD
-        broadcastJoin.foreach {
-          case input: QueryStageInput => input.isLocalShuffle = true
-          case _ =>
-        }
-
         // Connect the broadcastJoin operator and its parent.
         val originalChildren = parent.children
         val index = parent.children.indexOf(smj)
@@ -187,8 +198,14 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
         val numExchanges = afterEnsureRequirements.collect {
           case e: ShuffleExchange => e
         }.length
+
         if ((queryStage.isLastStage && numExchanges == 0) ||
           (!queryStage.isLastStage && numExchanges <= 1)) {
+          // Set QueryStageInput to return local shuffled RDD
+          broadcastJoin.foreach {
+            case input: QueryStageInput => input.isLocalShuffle = true
+            case _ =>
+          }
           broadcastJoin
         } else {
           parent.withNewChildren(originalChildren)
@@ -229,9 +246,9 @@ case class PlanQueryStage(conf: SQLConf) extends Rule[SparkPlan] {
       return plan
     }
 
-    plan.transformUp {
+    val newPlan = plan.transformUp {
       case operator: ShuffleExchange => QueryStageInput(QueryStage(operator))
     }
-    QueryStage(plan)
+    QueryStage(newPlan)
   }
 }
