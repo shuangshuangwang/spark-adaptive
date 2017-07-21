@@ -112,6 +112,8 @@ case class QueryStage(var child: SparkPlan) extends UnaryExecNode {
 
       // 2. Optimize join in this stage based on previous stages' statistics.
       OptimizeJoin(conf).apply(this)
+      // If the Joins are changed, we need apply EnsureRequirements rule to add BroadcastExchange.
+      child = EnsureRequirements(conf).apply(child)
 
       // 3. Determine reducer number
       val childMapOutputStatistics = childStages.map(_.mapOutputStatistics)
@@ -141,6 +143,15 @@ case class QueryStage(var child: SparkPlan) extends UnaryExecNode {
     }
     cachedRDD
   }
+
+  override def computeStats: Statistics = {
+    if (mapOutputStatistics != null) {
+      val sizeInBytes = mapOutputStatistics.bytesByPartitionId.sum
+      Statistics(sizeInBytes = sizeInBytes)
+    } else {
+      child.stats
+    }
+  }
 }
 
 case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
@@ -169,7 +180,6 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
 
   private def optimizeSortMergeJoin(
       smj: SortMergeJoinExec,
-      parent: SparkPlan,
       queryStage: QueryStage): SparkPlan = {
     smj match {
       case SortMergeJoinExec(leftKeys, rightKeys, joinType, condition, left, right) =>
@@ -184,17 +194,13 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
         val broadcastJoin = BroadcastHashJoinExec(
           leftKeys, rightKeys, joinType, buildSide, condition, removeSort(left), removeSort(right))
 
-        // Connect the broadcastJoin operator and its parent.
-        val originalChildren = parent.children
-        val index = parent.children.indexOf(smj)
-        val updatedChildren = parent.children.updated(index, broadcastJoin)
-        parent.withNewChildren(updatedChildren)
-
+        val newQueryStage = queryStage.transformDown {
+          case s: SortMergeJoinExec if (s.fastEquals(smj)) => broadcastJoin
+        }
         // Apply EnsureRequirement rule to check if any new Exchange will be added. If no
         // Exchange is added, we convert the sortMergeJoin to BroadcastHashJoin. Otherwise
         // we don't convert it because it causes additional Shuffle.
-        // TODO verify BroadcastExchangeExec is added.
-        val afterEnsureRequirements = EnsureRequirements(conf).apply(queryStage)
+        val afterEnsureRequirements = EnsureRequirements(conf).apply(newQueryStage)
         val numExchanges = afterEnsureRequirements.collect {
           case e: ShuffleExchange => e
         }.length
@@ -208,7 +214,6 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
           }
           broadcastJoin
         } else {
-          parent.withNewChildren(originalChildren)
           smj
         }
       }.getOrElse(smj)
@@ -217,22 +222,21 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
 
   private def optimizeJoin(
       operator: SparkPlan,
-      parent: SparkPlan,
       queryStage: QueryStage): SparkPlan = {
     operator match {
       case smj: SortMergeJoinExec =>
-        val op = optimizeSortMergeJoin(smj, parent, queryStage)
-        val optimizedChildren = op.children.map(optimizeJoin(_, op, queryStage))
+        val op = optimizeSortMergeJoin(smj, queryStage)
+        val optimizedChildren = op.children.map(optimizeJoin(_, queryStage))
         op.withNewChildren(optimizedChildren)
       case op =>
-        val optimizedChildren = op.children.map(optimizeJoin(_, op, queryStage))
+        val optimizedChildren = op.children.map(optimizeJoin(_, queryStage))
         op.withNewChildren(optimizedChildren)
     }
   }
 
   def apply(plan: SparkPlan): SparkPlan = plan match {
     case queryStage: QueryStage =>
-      val optimizedPlan = optimizeJoin(queryStage.child, queryStage, queryStage)
+      val optimizedPlan = optimizeJoin(queryStage.child, queryStage)
       queryStage.child = optimizedPlan
       queryStage
     case _ => plan
