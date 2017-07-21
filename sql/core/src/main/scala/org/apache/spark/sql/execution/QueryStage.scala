@@ -194,13 +194,13 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
         val broadcastJoin = BroadcastHashJoinExec(
           leftKeys, rightKeys, joinType, buildSide, condition, removeSort(left), removeSort(right))
 
-        val newQueryStage = queryStage.transformDown {
+        val newQueryStageChild = queryStage.child.transformDown {
           case s: SortMergeJoinExec if (s.fastEquals(smj)) => broadcastJoin
         }
         // Apply EnsureRequirement rule to check if any new Exchange will be added. If no
         // Exchange is added, we convert the sortMergeJoin to BroadcastHashJoin. Otherwise
         // we don't convert it because it causes additional Shuffle.
-        val afterEnsureRequirements = EnsureRequirements(conf).apply(newQueryStage)
+        val afterEnsureRequirements = EnsureRequirements(conf).apply(newQueryStageChild)
         val numExchanges = afterEnsureRequirements.collect {
           case e: ShuffleExchange => e
         }.length
@@ -212,6 +212,8 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
             case input: QueryStageInput => input.isLocalShuffle = true
             case _ =>
           }
+          // Update the plan in queryStage
+          queryStage.child = newQueryStageChild
           broadcastJoin
         } else {
           smj
