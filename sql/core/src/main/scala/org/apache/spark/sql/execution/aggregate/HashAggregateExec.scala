@@ -884,16 +884,6 @@ case class HashAggregateExec(
      """
   }
 
-  override def computeStats: Statistics = {
-    if (groupingExpressions.isEmpty) {
-      // Assign a generic overhead for a row object
-      val sizeInBytes = 8 + output.map(_.dataType.defaultSize).sum
-      Statistics(sizeInBytes)
-    } else {
-      super.computeStats
-    }
-  }
-
   override def verboseString: String = toString(verbose = true)
 
   override def simpleString: String = toString(verbose = false)

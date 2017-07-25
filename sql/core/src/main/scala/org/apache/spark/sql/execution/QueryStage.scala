@@ -58,10 +58,6 @@ case class QueryStageInput(
       new ShuffledRowRDD(childRDD.dependency, specifiedPartitionStartIndices)
     }
   }
-
-  override def computeStats: Statistics = {
-    childStage.stats
-  }
 }
 
 case class QueryStage(var child: SparkPlan) extends UnaryExecNode {
@@ -142,15 +138,6 @@ case class QueryStage(var child: SparkPlan) extends UnaryExecNode {
       }
     }
     cachedRDD
-  }
-
-  override def computeStats: Statistics = {
-    if (mapOutputStatistics != null) {
-      val sizeInBytes = mapOutputStatistics.bytesByPartitionId.sum
-      Statistics(sizeInBytes = sizeInBytes)
-    } else {
-      child.stats
-    }
   }
 }
 

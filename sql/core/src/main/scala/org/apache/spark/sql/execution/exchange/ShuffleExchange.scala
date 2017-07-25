@@ -63,12 +63,12 @@ case class ShuffleExchange(
     new UnsafeRowSerializer(child.output.size, longMetric("dataSize"))
 
   /**
-   * Returns a [[ShuffleDependency]] that will partition rows of its child based on
-   * the partitioning scheme defined in `newPartitioning`. Those partitions of
-   * the returned ShuffleDependency will be the input of shuffle.
-   */
+    * Returns a [[ShuffleDependency]] that will partition rows of its child based on
+    * the partitioning scheme defined in `newPartitioning`. Those partitions of
+    * the returned ShuffleDependency will be the input of shuffle.
+    */
   private[exchange] def prepareShuffleDependency()
-    : ShuffleDependency[Int, InternalRow, InternalRow] = {
+  : ShuffleDependency[Int, InternalRow, InternalRow] = {
     ShuffleExchange.prepareShuffleDependency(
       child.execute(), child.output, newPartitioning, serializer)
   }
@@ -100,8 +100,8 @@ case class ShuffleExchange(
   protected override def doExecute(): RDD[InternalRow] = attachTree(this, "execute") {
     // Returns the same ShuffleRowRDD if this plan is used by multiple plans.
     if (cachedShuffleRDD == null) {
-        val shuffleDependency = prepareShuffleDependency()
-        cachedShuffleRDD = preparePostShuffleRDD(shuffleDependency)
+      val shuffleDependency = prepareShuffleDependency()
+      cachedShuffleRDD = preparePostShuffleRDD(shuffleDependency)
     }
     cachedShuffleRDD
   }
@@ -122,15 +122,6 @@ case class ShuffleExchange(
       }
     }
     cachedShuffleRDD
-  }
-
-  override def computeStats: Statistics = {
-    if (_mapOutputStatistics != null) {
-      val sizeInBytes = _mapOutputStatistics.bytesByPartitionId.sum
-      Statistics(sizeInBytes = sizeInBytes)
-    } else {
-      super.computeStats
-    }
   }
 }
 

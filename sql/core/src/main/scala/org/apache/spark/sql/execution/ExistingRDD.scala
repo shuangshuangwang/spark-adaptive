@@ -25,9 +25,7 @@ import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.plans.logical.{Statistics => LogicalPlanStatistics}
 import org.apache.spark.sql.catalyst.plans.physical.{Partitioning, UnknownPartitioning}
-import org.apache.spark.sql.execution.{Statistics => PhsicalPlanStatistics}
 import org.apache.spark.sql.execution.metric.SQLMetrics
-import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.util.Utils
 
@@ -121,13 +119,6 @@ case class ExternalRDDScanExec[T](
   override def simpleString: String = {
     s"Scan $nodeName${output.mkString("[", ",", "]")}"
   }
-
-  @transient override def computeStats: PhsicalPlanStatistics =
-    PhsicalPlanStatistics(
-      // TODO: Instead of returning a default value here, find a way to return a meaningful size
-      // estimate for RDDs. See PR 1238 for more discussions.
-      sizeInBytes = BigInt(conf.defaultSizeInBytes)
-    )
 }
 
 /** Logical plan node for scanning data from an RDD of InternalRow. */
@@ -199,11 +190,4 @@ case class RDDScanExec(
   override def simpleString: String = {
     s"Scan $nodeName${Utils.truncatedString(output, "[", ",", "]")}"
   }
-
-  @transient override def computeStats: PhsicalPlanStatistics =
-    PhsicalPlanStatistics(
-      // TODO: Instead of returning a default value here, find a way to return a meaningful size
-      // estimate for RDDs. See PR 1238 for more discussions.
-      sizeInBytes = BigInt(conf.defaultSizeInBytes)
-    )
 }

@@ -140,10 +140,6 @@ case class RowDataSourceScanExec(
   // Only care about `relation` and `metadata` when canonicalizing.
   override def preCanonicalized: SparkPlan =
     copy(rdd = null, outputPartitioning = null, metastoreTableIdentifier = None)
-
-  override def computeStats: Statistics = {
-    Statistics(sizeInBytes = relation.sizeInBytes)
-  }
 }
 
 /**
@@ -526,9 +522,5 @@ case class FileSourceScanExec(
       QueryPlan.normalizePredicates(partitionFilters, output),
       QueryPlan.normalizePredicates(dataFilters, output),
       None)
-  }
-
-  override def computeStats: Statistics = {
-    Statistics(sizeInBytes = relation.sizeInBytes)
   }
 }
