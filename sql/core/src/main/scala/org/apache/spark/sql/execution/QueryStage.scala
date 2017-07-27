@@ -28,6 +28,7 @@ import org.apache.spark.sql.catalyst.expressions.{Attribute, SortOrder}
 import org.apache.spark.sql.catalyst.plans._
 import org.apache.spark.sql.catalyst.plans.physical.{Partitioning, UnknownPartitioning}
 import org.apache.spark.sql.catalyst.rules.Rule
+import org.apache.spark.sql.execution.command.ExecutedCommandExec
 import org.apache.spark.sql.execution.exchange._
 import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, BuildLeft, BuildRight, SortMergeJoinExec}
 import org.apache.spark.sql.execution.ui.SparkListenerSQLAdaptiveExecutionUpdate
@@ -81,9 +82,6 @@ case class QueryStage(var child: SparkPlan) extends UnaryExecNode {
 
   private var mapOutputStatistics: MapOutputStatistics = null
 
-  private val executionId = sqlContext.sparkContext.getLocalProperty(
-    SQLExecution.EXECUTION_ID_KEY)
-
   private lazy val queryStageInputs: Seq[QueryStageInput] = child.collect {
     case input: QueryStageInput => input
   }
@@ -109,6 +107,7 @@ case class QueryStage(var child: SparkPlan) extends UnaryExecNode {
     if (cachedRDD == null) {
       // 1. Execute childStages
       // Use a thread pool to avoid blocking on one child stage.
+      val executionId = sqlContext.sparkContext.getLocalProperty(SQLExecution.EXECUTION_ID_KEY)
       val childStages = queryStageInputs.map(_.childStage)
       if (childStages.length > 0) {
         val mapStageThreadPool =
@@ -149,11 +148,13 @@ case class QueryStage(var child: SparkPlan) extends UnaryExecNode {
 
       // 4. Codegen, update the UI and execute the plan in this stage
       child = CollapseCodegenStages(sqlContext.conf).apply(child)
-      val queryExecution = SQLExecution.getQueryExecution(executionId.toLong)
-      sparkContext.listenerBus.post(SparkListenerSQLAdaptiveExecutionUpdate(
-        executionId.toLong,
-        queryExecution.toString,
-        SparkPlanInfo.fromSparkPlan(queryExecution.executedPlan)))
+      if (executionId != null && executionId.nonEmpty) {
+        val queryExecution = SQLExecution.getQueryExecution(executionId.toLong)
+        sparkContext.listenerBus.post(SparkListenerSQLAdaptiveExecutionUpdate(
+          executionId.toLong,
+          queryExecution.toString,
+          SparkPlanInfo.fromSparkPlan(queryExecution.executedPlan)))
+      }
       child match {
         case exchange: ShuffleExchange =>
           // submit map stage and wait
@@ -287,6 +288,9 @@ case class PlanQueryStage(conf: SQLConf) extends Rule[SparkPlan] {
     val newPlan = plan.transformUp {
       case operator: ShuffleExchange => QueryStageInput(QueryStage(operator))
     }
-    QueryStage(newPlan)
+    newPlan match {
+      case c: ExecutedCommandExec => c
+      case other => QueryStage(other)
+    }
   }
 }
