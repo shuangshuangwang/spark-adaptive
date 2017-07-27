@@ -63,10 +63,10 @@ case class ShuffleExchange(
     new UnsafeRowSerializer(child.output.size, longMetric("dataSize"))
 
   /**
-    * Returns a [[ShuffleDependency]] that will partition rows of its child based on
-    * the partitioning scheme defined in `newPartitioning`. Those partitions of
-    * the returned ShuffleDependency will be the input of shuffle.
-    */
+   * Returns a [[ShuffleDependency]] that will partition rows of its child based on
+   * the partitioning scheme defined in `newPartitioning`. Those partitions of
+   * the returned ShuffleDependency will be the input of shuffle.
+   */
   private[exchange] def prepareShuffleDependency()
   : ShuffleDependency[Int, InternalRow, InternalRow] = {
     ShuffleExchange.prepareShuffleDependency(

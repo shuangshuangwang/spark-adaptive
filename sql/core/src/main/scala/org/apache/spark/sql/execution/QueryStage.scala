@@ -30,6 +30,7 @@ import org.apache.spark.sql.catalyst.plans.physical.{Partitioning, UnknownPartit
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.execution.exchange._
 import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, BuildLeft, BuildRight, SortMergeJoinExec}
+import org.apache.spark.sql.execution.statsEstimation.Statistics
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.util.ThreadUtils
 
@@ -57,6 +58,10 @@ case class QueryStageInput(
     } else {
       new ShuffledRowRDD(childRDD.dependency, specifiedPartitionStartIndices)
     }
+  }
+
+  override def computeStats(): Statistics = {
+    childStage.stats
   }
 }
 
