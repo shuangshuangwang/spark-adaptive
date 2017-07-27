@@ -30,6 +30,7 @@ import org.apache.spark.sql.catalyst.plans.physical.{Partitioning, UnknownPartit
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.execution.exchange._
 import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, BuildLeft, BuildRight, SortMergeJoinExec}
+import org.apache.spark.sql.execution.ui.SparkListenerSQLAdaptiveExecutionUpdate
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.util.ThreadUtils
 
@@ -57,6 +58,16 @@ case class QueryStageInput(
     } else {
       new ShuffledRowRDD(childRDD.dependency, specifiedPartitionStartIndices)
     }
+  }
+
+  override def generateTreeString(
+      depth: Int,
+      lastChildren: Seq[Boolean],
+      builder: StringBuilder,
+      verbose: Boolean,
+      prefix: String = "",
+      addSuffix: Boolean = false): StringBuilder = {
+    childStage.generateTreeString(depth, lastChildren, builder, verbose, "*")
   }
 
   override def computeStats: Statistics = {
@@ -87,6 +98,12 @@ case class QueryStage(var child: SparkPlan) extends UnaryExecNode {
   override def outputPartitioning: Partitioning = child.outputPartitioning
 
   override def outputOrdering: Seq[SortOrder] = child.outputOrdering
+
+  override def prepare(): Unit = {
+    // We don't want to call children's `prepare` methods at this moment because the plan may
+    // still change in `doExecute`.
+    prepared = true
+  }
 
   override def doExecute(): RDD[InternalRow] = {
     if (cachedRDD == null) {
@@ -130,9 +147,14 @@ case class QueryStage(var child: SparkPlan) extends UnaryExecNode {
         queryStageInputs.foreach(_.specifiedPartitionStartIndices = Some(partitionStartIndices))
       }
 
-      // 4. Execute plan in this stage
-      val afterCodegen = CollapseCodegenStages(sqlContext.conf).apply(child)
-      afterCodegen match {
+      // 4. Codegen, update the UI and execute the plan in this stage
+      child = CollapseCodegenStages(sqlContext.conf).apply(child)
+      val queryExecution = SQLExecution.getQueryExecution(executionId.toLong)
+      sparkContext.listenerBus.post(SparkListenerSQLAdaptiveExecutionUpdate(
+        executionId.toLong,
+        queryExecution.toString,
+        SparkPlanInfo.fromSparkPlan(queryExecution.executedPlan)))
+      child match {
         case exchange: ShuffleExchange =>
           // submit map stage and wait
           cachedRDD = exchange.eagerExecute()
@@ -142,6 +164,16 @@ case class QueryStage(var child: SparkPlan) extends UnaryExecNode {
       }
     }
     cachedRDD
+  }
+
+  override def generateTreeString(
+      depth: Int,
+      lastChildren: Seq[Boolean],
+      builder: StringBuilder,
+      verbose: Boolean,
+      prefix: String = "",
+      addSuffix: Boolean = false): StringBuilder = {
+    child.generateTreeString(depth, lastChildren, builder, verbose, "*")
   }
 
   override def computeStats: Statistics = {
