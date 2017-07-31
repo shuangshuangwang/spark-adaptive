@@ -19,6 +19,7 @@ package org.apache.spark.sql.execution
 
 import org.scalatest.BeforeAndAfterAll
 
+import org.apache.spark.sql.execution.exchange.ReusedExchangeExec
 import org.apache.spark.{SparkConf, SparkFunSuite}
 import org.apache.spark.sql._
 import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, SortMergeJoinExec}
@@ -250,4 +251,39 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
       assert(queryStageInputs.length === 3)
     }
   }
+
+  test("ReusedExchange in adaptive execution") {
+    withSparkSession { spark: SparkSession =>
+      val df = spark.range(0, 1000, 1, numInputPartitions).toDF()
+      val join = df.join(df, "id")
+
+      // Before Execution, there is one SortMergeJoin
+      val SmjBeforeExecution = join.queryExecution.executedPlan.collect {
+        case smj: SortMergeJoinExec => smj
+      }
+      assert(SmjBeforeExecution.length === 1)
+
+      checkAnswer(join, df.collect())
+
+      // During execution, the SortMergeJoin is changed to BroadcastHashJoinExec
+      val SmjAfterExecution = join.queryExecution.executedPlan.collect {
+        case smj: SortMergeJoinExec => smj
+      }
+      assert(SmjAfterExecution.length === 0)
+
+      val numBhjAfterExecution = join.queryExecution.executedPlan.collect {
+        case smj: BroadcastHashJoinExec => smj
+      }.length
+      assert(numBhjAfterExecution === 1)
+
+      val queryStageInputs = join.queryExecution.executedPlan.collect {
+        case q: QueryStageInput => q
+      }
+      assert(queryStageInputs.length === 2)
+
+      assert(
+        queryStageInputs.map(_.childStage).filter(_.isInstanceOf[ReusedQueryStage]).length === 1)
+    }
+  }
+
 }

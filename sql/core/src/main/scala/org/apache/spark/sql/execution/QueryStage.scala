@@ -20,8 +20,10 @@ package org.apache.spark.sql.execution
 import java.util.concurrent.Future
 
 import scala.collection.mutable
+import scala.collection.mutable.ArrayBuffer
 
 import org.apache.spark.MapOutputStatistics
+import org.apache.spark.broadcast
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, SortOrder}
@@ -33,33 +35,21 @@ import org.apache.spark.sql.execution.exchange._
 import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, BuildLeft, BuildRight, SortMergeJoinExec}
 import org.apache.spark.sql.execution.ui.SparkListenerSQLAdaptiveExecutionUpdate
 import org.apache.spark.sql.internal.SQLConf
+import org.apache.spark.sql.types.StructType
 import org.apache.spark.util.ThreadUtils
 
 /**
  * QueryStageInput is the leaf node of a QueryStage and is used to hide its child stage.
  */
-case class QueryStageInput(
-    childStage: QueryStage,
-    var isLocalShuffle: Boolean = false,
-    var specifiedPartitionStartIndices: Option[Array[Int]] = None)
-  extends LeafExecNode {
+abstract class QueryStageInput extends LeafExecNode {
 
-  override def outputPartitioning: Partitioning = specifiedPartitionStartIndices.map {
-    indices => UnknownPartitioning(indices.length)
-  }.getOrElse(childStage.outputPartitioning)
+  def childStage: QueryStage
 
   override def output: Seq[Attribute] = childStage.output
 
-  override def outputOrdering: Seq[SortOrder] = childStage.outputOrdering
+  override def outputPartitioning: Partitioning = childStage.outputPartitioning
 
-  override def doExecute(): RDD[InternalRow] = {
-    val childRDD = childStage.execute().asInstanceOf[ShuffledRowRDD]
-    if (isLocalShuffle) {
-      new LocalShuffledRowRDD(childRDD.dependency)
-    } else {
-      new ShuffledRowRDD(childRDD.dependency, specifiedPartitionStartIndices)
-    }
-  }
+  override def outputOrdering: Seq[SortOrder] = childStage.outputOrdering
 
   override def generateTreeString(
       depth: Int,
@@ -76,20 +66,46 @@ case class QueryStageInput(
   }
 }
 
-case class QueryStage(var child: SparkPlan) extends UnaryExecNode {
+case class ShuffleQueryStageInput(
+    childStage: QueryStage,
+    var isLocalShuffle: Boolean = false,
+    var specifiedPartitionStartIndices: Option[Array[Int]] = None)
+  extends QueryStageInput {
 
-  private var cachedRDD: RDD[InternalRow] = null
+  override def outputPartitioning: Partitioning = specifiedPartitionStartIndices.map {
+    indices => UnknownPartitioning(indices.length)
+  }.getOrElse(childStage.outputPartitioning)
 
-  private var mapOutputStatistics: MapOutputStatistics = null
+  override def doExecute(): RDD[InternalRow] = {
+    val childRDD = childStage.execute().asInstanceOf[ShuffledRowRDD]
+    if (isLocalShuffle) {
+      new LocalShuffledRowRDD(childRDD.dependency)
+    } else {
+      new ShuffledRowRDD(childRDD.dependency, specifiedPartitionStartIndices)
+    }
+  }
+}
 
-  private lazy val queryStageInputs: Seq[QueryStageInput] = child.collect {
-    case input: QueryStageInput => input
+case class BroadcastQueryStageInput(childStage: QueryStage)
+  extends QueryStageInput {
+
+  override def doExecuteBroadcast[T](): broadcast.Broadcast[T] = {
+    childStage.executeBroadcast()
   }
 
-  def isLastStage: Boolean = child match {
-    case _: ShuffleExchange => false
-    case _ => true
+  override def doExecute(): RDD[InternalRow] = {
+    throw new UnsupportedOperationException(
+      "BroadcastStageInput does not support the execute() code path.")
   }
+}
+
+abstract class QueryStage extends UnaryExecNode {
+
+  var child: SparkPlan
+
+  protected var _mapOutputStatistics: MapOutputStatistics = null
+
+  def mapOutputStatistics: MapOutputStatistics = _mapOutputStatistics
 
   override def output: Seq[Attribute] = child.output
 
@@ -97,42 +113,61 @@ case class QueryStage(var child: SparkPlan) extends UnaryExecNode {
 
   override def outputOrdering: Seq[SortOrder] = child.outputOrdering
 
-  override def prepare(): Unit = {
-    // We don't want to call children's `prepare` methods at this moment because the plan may
-    // still change in `doExecute`.
-    prepared = true
-  }
-
-  override def doExecute(): RDD[InternalRow] = {
-    if (cachedRDD == null) {
-      // 1. Execute childStages
-      // Use a thread pool to avoid blocking on one child stage.
-      val executionId = sqlContext.sparkContext.getLocalProperty(SQLExecution.EXECUTION_ID_KEY)
-      val childStages = queryStageInputs.map(_.childStage)
-      if (childStages.length > 0) {
-        val mapStageThreadPool =
-          ThreadUtils.newDaemonFixedThreadPool(childStages.length, "adaptive-submit-stage-pool")
-        var submitStageTasks = mutable.ArrayBuffer[Future[_]]()
-        childStages.foreach { childStage =>
-          submitStageTasks += mapStageThreadPool.submit(new Runnable {
+  def executeChildStages(): Unit = {
+    // 1. Execute childStages
+    // Use a thread pool to avoid blocking on one child stage.
+    val executionId = sqlContext.sparkContext.getLocalProperty(SQLExecution.EXECUTION_ID_KEY)
+    val queryStageInputs: Seq[QueryStageInput] = child.collect {
+      case input: QueryStageInput => input
+    }
+    val mapStageThreadPool = ThreadUtils.newDaemonCachedThreadPool("adaptive-submit-stage-pool")
+    var submitStageTasks = mutable.ArrayBuffer[Future[_]]()
+    queryStageInputs.foreach {
+      case ShuffleQueryStageInput(queryStage: ShuffleQueryStage, _, _) =>
+        submitStageTasks += mapStageThreadPool.submit(
+          new Runnable {
             override def run(): Unit = {
               SQLExecution.withExecutionId(sqlContext.sparkContext, executionId) {
-                childStage.execute()
+                queryStage.execute()
               }
             }
           })
-        }
-        submitStageTasks.foreach(_.get())
-        mapStageThreadPool.shutdown()
+      case ShuffleQueryStageInput(reusedQueryStage: ReusedQueryStage, _, _) =>
+        val newExchange = reusedQueryStage.queryStage.child.asInstanceOf[Exchange]
+        reusedQueryStage.child = ReusedExchangeExec(
+          reusedQueryStage.child.output,
+          newExchange)
+      case BroadcastQueryStageInput(broadcastQueryStage: BroadcastQueryStage) =>
+        broadcastQueryStage.prepareBroadcast()
+      case BroadcastQueryStageInput(reusedQueryStage: ReusedQueryStage) =>
+        val newExchange = reusedQueryStage.queryStage.child.asInstanceOf[Exchange]
+        reusedQueryStage.child = ReusedExchangeExec(
+          reusedQueryStage.child.output,
+          newExchange)
+    }
+    submitStageTasks.foreach(_.get())
+    mapStageThreadPool.shutdown()
+
+    // 2. Optimize join in this stage based on previous stages' statistics.
+    OptimizeJoin(conf).apply(this)
+    // If the Joins are changed, we need apply EnsureRequirements rule to add BroadcastExchange.
+    child = EnsureRequirements(conf).apply(child)
+  }
+
+  def executeStage(): RDD[InternalRow] = child.execute()
+
+  private var cachedRDD: RDD[InternalRow] = null
+
+  override def doExecute(): RDD[InternalRow] = {
+    if (cachedRDD == null) {
+      // 1. Execute childStages and optimize the plan in this stage
+      executeChildStages()
+
+      // 2. Determine reducer number
+      val queryStageInputs: Seq[ShuffleQueryStageInput] = child.collect {
+        case input: ShuffleQueryStageInput => input
       }
-
-      // 2. Optimize join in this stage based on previous stages' statistics.
-      OptimizeJoin(conf).apply(this)
-      // If the Joins are changed, we need apply EnsureRequirements rule to add BroadcastExchange.
-      child = EnsureRequirements(conf).apply(child)
-
-      // 3. Determine reducer number
-      val childMapOutputStatistics = childStages.map(_.mapOutputStatistics)
+      val childMapOutputStatistics = queryStageInputs.map(_.childStage.mapOutputStatistics)
         .filter(_ != null).toArray
       if (childMapOutputStatistics.length > 0) {
         val minNumPostShufflePartitions =
@@ -146,8 +181,9 @@ case class QueryStage(var child: SparkPlan) extends UnaryExecNode {
         queryStageInputs.foreach(_.specifiedPartitionStartIndices = Some(partitionStartIndices))
       }
 
-      // 4. Codegen, update the UI and execute the plan in this stage
+      // 3. Codegen and update the UI
       child = CollapseCodegenStages(sqlContext.conf).apply(child)
+      val executionId = sqlContext.sparkContext.getLocalProperty(SQLExecution.EXECUTION_ID_KEY)
       if (executionId != null && executionId.nonEmpty) {
         val queryExecution = SQLExecution.getQueryExecution(executionId.toLong)
         sparkContext.listenerBus.post(SparkListenerSQLAdaptiveExecutionUpdate(
@@ -155,14 +191,9 @@ case class QueryStage(var child: SparkPlan) extends UnaryExecNode {
           queryExecution.toString,
           SparkPlanInfo.fromSparkPlan(queryExecution.executedPlan)))
       }
-      child match {
-        case exchange: ShuffleExchange =>
-          // submit map stage and wait
-          cachedRDD = exchange.eagerExecute()
-          mapOutputStatistics = exchange.mapOutputStatistics
-        case operator => // last stage
-          cachedRDD = operator.execute()
-      }
+
+      // 4. Execute the plan in this stage
+      cachedRDD = executeStage()
     }
     cachedRDD
   }
@@ -185,6 +216,54 @@ case class QueryStage(var child: SparkPlan) extends UnaryExecNode {
       child.stats
     }
   }
+}
+
+case class ResultQueryStage(var child: SparkPlan) extends QueryStage
+
+case class ShuffleQueryStage(var child: SparkPlan) extends QueryStage {
+  override def executeStage(): RDD[InternalRow] = {
+    child match {
+      case e: ShuffleExchange =>
+        val result = e.eagerExecute()
+        _mapOutputStatistics = e.mapOutputStatistics
+        result
+      case _ => throw new IllegalArgumentException(
+        "The child of ShuffleQueryStage must be a ShuffleExchange.")
+    }
+  }
+}
+
+case class BroadcastQueryStage(var child: SparkPlan) extends QueryStage {
+  override def doExecuteBroadcast[T](): broadcast.Broadcast[T] = {
+    child.executeBroadcast()
+  }
+
+  def prepareBroadcast() : Unit = {
+    executeChildStages()
+    child = CollapseCodegenStages(sqlContext.conf).apply(child)
+  }
+
+  override def doExecute(): RDD[InternalRow] = {
+    throw new UnsupportedOperationException(
+      "BroadcastExchange does not support the execute() code path.")
+  }
+}
+
+case class ReusedQueryStage(
+    var child: SparkPlan,
+    queryStage: QueryStage) extends QueryStage {
+
+  override def doExecuteBroadcast[T](): broadcast.Broadcast[T] = {
+    child.executeBroadcast()
+  }
+
+  override def doExecute(): RDD[InternalRow] = {
+    child.execute()
+  }
+
+  override def mapOutputStatistics: MapOutputStatistics = queryStage.mapOutputStatistics
+
+  override def computeStats: Statistics = queryStage.stats
 }
 
 case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
@@ -227,26 +306,26 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
         val broadcastJoin = BroadcastHashJoinExec(
           leftKeys, rightKeys, joinType, buildSide, condition, removeSort(left), removeSort(right))
 
-        val newQueryStageChild = queryStage.child.transformDown {
+        val newChild = queryStage.child.transformDown {
           case s: SortMergeJoinExec if (s.fastEquals(smj)) => broadcastJoin
         }
         // Apply EnsureRequirement rule to check if any new Exchange will be added. If no
         // Exchange is added, we convert the sortMergeJoin to BroadcastHashJoin. Otherwise
         // we don't convert it because it causes additional Shuffle.
-        val afterEnsureRequirements = EnsureRequirements(conf).apply(newQueryStageChild)
+        val afterEnsureRequirements = EnsureRequirements(conf).apply(newChild)
         val numExchanges = afterEnsureRequirements.collect {
           case e: ShuffleExchange => e
         }.length
 
-        if ((queryStage.isLastStage && numExchanges == 0) ||
-          (!queryStage.isLastStage && numExchanges <= 1)) {
+        if ((numExchanges == 0) ||
+          (queryStage.isInstanceOf[ShuffleQueryStage] && numExchanges <= 1)) {
           // Set QueryStageInput to return local shuffled RDD
           broadcastJoin.foreach {
-            case input: QueryStageInput => input.isLocalShuffle = true
+            case input: ShuffleQueryStageInput => input.isLocalShuffle = true
             case _ =>
           }
           // Update the plan in queryStage
-          queryStage.child = newQueryStageChild
+          queryStage.child = newChild
           broadcastJoin
         } else {
           smj
@@ -285,12 +364,76 @@ case class PlanQueryStage(conf: SQLConf) extends Rule[SparkPlan] {
       return plan
     }
 
+    // Build a hash map using schema of exchanges to avoid O(N*N) sameResult calls.
+    val stages = mutable.HashMap[StructType, ArrayBuffer[QueryStage]]()
+
     val newPlan = plan.transformUp {
-      case operator: ShuffleExchange => QueryStageInput(QueryStage(operator))
+      case exchange: Exchange =>
+        val sameSchema = stages.getOrElseUpdate(exchange.schema, ArrayBuffer[QueryStage]())
+        val samePlan = sameSchema.find { s =>
+          exchange.sameResult(s.child)
+        }
+        if (samePlan.isDefined) {
+          // Keep the output of this exchange, the following plans require that to resolve
+          // attributes.
+          val reusedExchange =
+            ReusedExchangeExec(exchange.output, samePlan.get.child.asInstanceOf[Exchange])
+          exchange match {
+            case e: ShuffleExchange =>
+              ShuffleQueryStageInput(ReusedQueryStage(reusedExchange, samePlan.get))
+            case e: BroadcastExchangeExec =>
+              BroadcastQueryStageInput(ReusedQueryStage(reusedExchange, samePlan.get))
+          }
+        } else {
+          val queryStageInput = exchange match {
+            case e: ShuffleExchange => ShuffleQueryStageInput(ShuffleQueryStage(e))
+            case e: BroadcastExchangeExec => BroadcastQueryStageInput(BroadcastQueryStage(e))
+          }
+          sameSchema += queryStageInput.childStage
+          queryStageInput
+        }
     }
     newPlan match {
       case c: ExecutedCommandExec => c
-      case other => QueryStage(other)
+      case other => ResultQueryStage(other)
+    }
+  }
+}
+
+/**
+ * Find out duplicated exchanges in the spark plan, then use the same exchange for all the
+ * references.
+ */
+case class ReuseQueryStage(conf: SQLConf) extends Rule[SparkPlan] {
+
+  def apply(plan: SparkPlan): SparkPlan = {
+    if (!conf.exchangeReuseEnabled) {
+      return plan
+    }
+    // Build a hash map using schema of exchanges to avoid O(N*N) sameResult calls.
+    val stages = mutable.HashMap[StructType, ArrayBuffer[QueryStage]]()
+    plan match {
+      case input: QueryStageInput =>
+        val exchange = input.childStage.child.asInstanceOf[Exchange]
+    }
+    plan.transformUp {
+      case qs: QueryStage if (qs.child.isInstanceOf[Exchange]) =>
+        val exchange = qs.child
+        // the exchanges that have same results usually also have same schemas (same column names).
+        val sameSchema = stages.getOrElseUpdate(exchange.schema, ArrayBuffer[QueryStage]())
+        val samePlan = sameSchema.find { s =>
+          exchange.sameResult(s.child)
+        }
+        if (samePlan.isDefined) {
+          // Keep the output of this exchange, the following plans require that to resolve
+          // attributes.
+          val reusedExchange =
+            ReusedExchangeExec(exchange.output, samePlan.get.child.asInstanceOf[Exchange])
+          ReusedQueryStage(reusedExchange, samePlan.get)
+        } else {
+          sameSchema += qs
+          qs
+        }
     }
   }
 }

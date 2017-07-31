@@ -173,12 +173,12 @@ abstract class SparkPlan extends QueryPlan[SparkPlan] with Logging with Serializ
   /**
    * Whether the "prepare" method is called.
    */
-  protected var prepared = false
+  private var prepared = false
 
   /**
    * Prepares this SparkPlan for execution. It's idempotent.
    */
-  def prepare(): Unit = {
+  final def prepare(): Unit = {
     // doPrepare() may depend on it's children, we should call prepare() on all the children first.
     children.foreach(_.prepare())
     synchronized {

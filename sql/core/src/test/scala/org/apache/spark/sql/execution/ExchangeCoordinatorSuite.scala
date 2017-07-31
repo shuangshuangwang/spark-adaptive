@@ -300,24 +300,20 @@ class ExchangeCoordinatorSuite extends SparkFunSuite with BeforeAndAfterAll {
         // Then, let's look at the number of post-shuffle partitions estimated
         // by the ExchangeCoordinator.
         val queryStageInputs = agg.queryExecution.executedPlan.collect {
-          case q: QueryStageInput => q
+          case q: ShuffleQueryStageInput => q
         }
         assert(queryStageInputs.length === 1)
         minNumPostShufflePartitions match {
           case Some(numPartitions) =>
-            queryStageInputs.foreach {
-              case q: QueryStageInput =>
+            queryStageInputs.foreach { q =>
                 assert(q.specifiedPartitionStartIndices.isDefined)
                 assert(q.outputPartitioning.numPartitions === 5)
-              case o =>
             }
 
           case None =>
-            queryStageInputs.foreach {
-              case q: QueryStageInput =>
+            queryStageInputs.foreach { q =>
                 assert(q.specifiedPartitionStartIndices.isDefined)
                 assert(q.outputPartitioning.numPartitions === 3)
-              case o =>
             }
         }
       }
@@ -351,24 +347,20 @@ class ExchangeCoordinatorSuite extends SparkFunSuite with BeforeAndAfterAll {
         // Then, let's look at the number of post-shuffle partitions estimated
         // by the ExchangeCoordinator.
         val queryStageInputs = join.queryExecution.executedPlan.collect {
-          case q: QueryStageInput => q
+          case q: ShuffleQueryStageInput => q
         }
         assert(queryStageInputs.length === 2)
         minNumPostShufflePartitions match {
           case Some(numPartitions) =>
-            queryStageInputs.foreach {
-              case q: QueryStageInput =>
+            queryStageInputs.foreach { q =>
                 assert(q.specifiedPartitionStartIndices.isDefined)
                 assert(q.outputPartitioning.numPartitions === 5)
-              case o =>
             }
 
           case None =>
-            queryStageInputs.foreach {
-              case q: QueryStageInput =>
+            queryStageInputs.foreach { q =>
                 assert(q.specifiedPartitionStartIndices.isDefined)
                 assert(q.outputPartitioning.numPartitions === 2)
-              case o =>
             }
         }
       }
@@ -407,24 +399,20 @@ class ExchangeCoordinatorSuite extends SparkFunSuite with BeforeAndAfterAll {
         // Then, let's look at the number of post-shuffle partitions estimated
         // by the ExchangeCoordinator.
         val queryStageInputs = join.queryExecution.executedPlan.collect {
-          case q: QueryStageInput => q
+          case q: ShuffleQueryStageInput => q
         }
         assert(queryStageInputs.length === 2)
         minNumPostShufflePartitions match {
           case Some(numPartitions) =>
-            queryStageInputs.foreach {
-              case q: QueryStageInput =>
+            queryStageInputs.foreach { q =>
                 assert(q.specifiedPartitionStartIndices.isDefined)
                 assert(q.outputPartitioning.numPartitions === 5)
-              case o =>
             }
 
           case None =>
-            queryStageInputs.foreach {
-              case q: QueryStageInput =>
+            queryStageInputs.foreach { q =>
                 assert(q.specifiedPartitionStartIndices.isDefined)
                 assert(q.outputPartitioning.numPartitions === 2)
-              case o =>
             }
         }
       }
@@ -463,24 +451,20 @@ class ExchangeCoordinatorSuite extends SparkFunSuite with BeforeAndAfterAll {
         // Then, let's look at the number of post-shuffle partitions estimated
         // by the ExchangeCoordinator.
         val queryStageInputs = join.queryExecution.executedPlan.collect {
-          case q: QueryStageInput => q
+          case q: ShuffleQueryStageInput => q
         }
         assert(queryStageInputs.length === 2)
         minNumPostShufflePartitions match {
           case Some(numPartitions) =>
-            queryStageInputs.foreach {
-              case q: QueryStageInput =>
+            queryStageInputs.foreach { q =>
                 assert(q.specifiedPartitionStartIndices.isDefined)
                 assert(q.outputPartitioning.numPartitions === 5)
-              case o =>
             }
 
           case None =>
-            queryStageInputs.foreach {
-              case q: QueryStageInput =>
+            queryStageInputs.foreach { q =>
                 assert(q.specifiedPartitionStartIndices.isDefined)
                 assert(q.outputPartitioning.numPartitions === 3)
-              case o =>
             }
         }
       }
