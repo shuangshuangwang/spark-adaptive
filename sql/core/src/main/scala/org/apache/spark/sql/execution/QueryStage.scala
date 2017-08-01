@@ -114,16 +114,17 @@ abstract class QueryStage extends UnaryExecNode {
   override def outputOrdering: Seq[SortOrder] = child.outputOrdering
 
   def executeChildStages(): Unit = {
-    // 1. Execute childStages
-    // Use a thread pool to avoid blocking on one child stage.
+    // Execute childStages. Use a thread pool to avoid blocking on one child stage.
     val executionId = sqlContext.sparkContext.getLocalProperty(SQLExecution.EXECUTION_ID_KEY)
-    val queryStageInputs: Seq[QueryStageInput] = child.collect {
-      case input: QueryStageInput => input
+
+    // Submit shuffle stages
+    val shuffleQueryStages: Seq[ShuffleQueryStage] = child.collect {
+      case ShuffleQueryStageInput(queryStage: ShuffleQueryStage, _, _) => queryStage
     }
-    val mapStageThreadPool = ThreadUtils.newDaemonCachedThreadPool("adaptive-submit-stage-pool")
-    var submitStageTasks = mutable.ArrayBuffer[Future[_]]()
-    queryStageInputs.foreach {
-      case ShuffleQueryStageInput(queryStage: ShuffleQueryStage, _, _) =>
+    if (shuffleQueryStages.length > 0) {
+      val mapStageThreadPool = ThreadUtils.newDaemonCachedThreadPool("adaptive-submit-stage-pool")
+      var submitStageTasks = mutable.ArrayBuffer[Future[_]]()
+      shuffleQueryStages.foreach { queryStage =>
         submitStageTasks += mapStageThreadPool.submit(
           new Runnable {
             override def run(): Unit = {
@@ -132,23 +133,30 @@ abstract class QueryStage extends UnaryExecNode {
               }
             }
           })
-      case ShuffleQueryStageInput(reusedQueryStage: ReusedQueryStage, _, _) =>
-        val newExchange = reusedQueryStage.queryStage.child.asInstanceOf[Exchange]
-        reusedQueryStage.child = ReusedExchangeExec(
-          reusedQueryStage.child.output,
-          newExchange)
-      case BroadcastQueryStageInput(broadcastQueryStage: BroadcastQueryStage) =>
-        broadcastQueryStage.prepareBroadcast()
-      case BroadcastQueryStageInput(reusedQueryStage: ReusedQueryStage) =>
-        val newExchange = reusedQueryStage.queryStage.child.asInstanceOf[Exchange]
+      }
+      submitStageTasks.foreach(_.get())
+      mapStageThreadPool.shutdown()
+    }
+
+    // Handle broadcast stages
+    val broadcastQueryStages: Seq[BroadcastQueryStage] = child.collect {
+      case BroadcastQueryStageInput(queryStage: BroadcastQueryStage) => queryStage
+    }
+    broadcastQueryStages.foreach(_.prepareBroadcast)
+
+    // Handle reused stages
+    val reusedQueryStages: Seq[ReusedQueryStage] = child.collect {
+      case ShuffleQueryStageInput(reusedQueryStage: ReusedQueryStage, _, _) => reusedQueryStage
+      case BroadcastQueryStageInput(reusedQueryStage: ReusedQueryStage) => reusedQueryStage
+    }
+    reusedQueryStages.foreach { reusedQueryStage =>
+      val newExchange = reusedQueryStage.queryStage.child.asInstanceOf[Exchange]
         reusedQueryStage.child = ReusedExchangeExec(
           reusedQueryStage.child.output,
           newExchange)
     }
-    submitStageTasks.foreach(_.get())
-    mapStageThreadPool.shutdown()
 
-    // 2. Optimize join in this stage based on previous stages' statistics.
+    // Optimize join in this stage based on previous stages' statistics.
     OptimizeJoin(conf).apply(this)
     // If the Joins are changed, we need apply EnsureRequirements rule to add BroadcastExchange.
     child = EnsureRequirements(conf).apply(child)

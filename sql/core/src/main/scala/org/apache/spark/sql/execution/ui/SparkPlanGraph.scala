@@ -100,7 +100,7 @@ object SparkPlanGraph {
            | "ShuffleQueryStage | ReusedQueryStage" =>
         buildSparkPlanGraphNode(
           planInfo.children.head, nodeIdGenerator, nodes, edges, parent, null, exchanges)
-      case "QueryStageInput" | "ShuffleQueryStageInput" | "BroadcastQueryStageInput"=>
+      case "QueryStageInput" | "ShuffleQueryStageInput" | "BroadcastQueryStageInput" =>
         buildSparkPlanGraphNode(
           planInfo.children.head, nodeIdGenerator, nodes, edges, parent, null, exchanges)
       case "Subquery" if subgraph != null =>
