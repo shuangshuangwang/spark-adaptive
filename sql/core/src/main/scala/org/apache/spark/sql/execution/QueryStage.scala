@@ -328,7 +328,7 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
         if ((numExchanges == 0) ||
           (queryStage.isInstanceOf[ShuffleQueryStage] && numExchanges <= 1)) {
           // Set QueryStageInput to return local shuffled RDD
-          broadcastJoin.foreach {
+          broadcastJoin.children.foreach {
             case input: ShuffleQueryStageInput => input.isLocalShuffle = true
             case _ =>
           }
