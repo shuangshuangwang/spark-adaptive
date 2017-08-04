@@ -23,7 +23,7 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.aggregate._
 import org.apache.spark.sql.catalyst.plans.physical._
-import org.apache.spark.sql.execution.{SparkPlan, Statistics, UnaryExecNode}
+import org.apache.spark.sql.execution.{SparkPlan, UnaryExecNode}
 import org.apache.spark.sql.execution.metric.SQLMetrics
 import org.apache.spark.util.Utils
 
@@ -103,16 +103,6 @@ case class SortAggregateExec(
           outputIter
         }
       }
-    }
-  }
-
-  override def computeStats: Statistics = {
-    if (groupingExpressions.isEmpty) {
-      // Assign a generic overhead for a row object
-      val sizeInBytes = 8 + output.map(_.dataType.defaultSize).sum
-      Statistics(sizeInBytes)
-    } else {
-      super.computeStats
     }
   }
 

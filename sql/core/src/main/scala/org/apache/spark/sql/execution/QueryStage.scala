@@ -33,6 +33,7 @@ import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.execution.command.ExecutedCommandExec
 import org.apache.spark.sql.execution.exchange._
 import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, BuildLeft, BuildRight, SortMergeJoinExec}
+import org.apache.spark.sql.execution.statsEstimation.Statistics
 import org.apache.spark.sql.execution.ui.SparkListenerSQLAdaptiveExecutionUpdate
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.StructType
@@ -215,15 +216,6 @@ abstract class QueryStage extends UnaryExecNode {
       addSuffix: Boolean = false): StringBuilder = {
     child.generateTreeString(depth, lastChildren, builder, verbose, "*")
   }
-
-  override def computeStats: Statistics = {
-    if (mapOutputStatistics != null) {
-      val sizeInBytes = mapOutputStatistics.bytesByPartitionId.sum
-      Statistics(sizeInBytes = sizeInBytes)
-    } else {
-      child.stats
-    }
-  }
 }
 
 case class ResultQueryStage(var child: SparkPlan) extends QueryStage
@@ -270,8 +262,6 @@ case class ReusedQueryStage(
   }
 
   override def mapOutputStatistics: MapOutputStatistics = queryStage.mapOutputStatistics
-
-  override def computeStats: Statistics = queryStage.stats
 }
 
 case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {

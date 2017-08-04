@@ -25,10 +25,10 @@ import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.codegen.{CodegenContext, ExprCode, GenerateUnsafeProjection}
 import org.apache.spark.sql.catalyst.plans._
 import org.apache.spark.sql.catalyst.plans.physical.{BroadcastDistribution, Distribution, Partitioning, UnspecifiedDistribution}
-import org.apache.spark.sql.execution.{BinaryExecNode, CodegenSupport, SparkPlan, Statistics}
+import org.apache.spark.sql.execution.{BinaryExecNode, CodegenSupport, SparkPlan}
 import org.apache.spark.sql.execution.metric.SQLMetrics
-import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.LongType
+import org.apache.spark.util.TaskCompletionListener
 
 /**
  * Performs an inner hash join of two child relations.  When the output RDD of this operator is
@@ -47,7 +47,8 @@ case class BroadcastHashJoinExec(
   extends BinaryExecNode with HashJoin with CodegenSupport {
 
   override lazy val metrics = Map(
-    "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"))
+    "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
+    "avgHashProbe" -> SQLMetrics.createAverageMetric(sparkContext, "avg hash probe"))
 
   override def requiredChildDistribution: Seq[Distribution] = {
     val mode = HashedRelationBroadcastMode(buildKeys)
@@ -61,12 +62,13 @@ case class BroadcastHashJoinExec(
 
   protected override def doExecute(): RDD[InternalRow] = {
     val numOutputRows = longMetric("numOutputRows")
+    val avgHashProbe = longMetric("avgHashProbe")
 
     val broadcastRelation = buildPlan.executeBroadcast[HashedRelation]()
     streamedPlan.execute().mapPartitions { streamedIter =>
       val hashed = broadcastRelation.value.asReadOnlyCopy()
       TaskContext.get().taskMetrics().incPeakExecutionMemory(hashed.estimatedSize)
-      join(streamedIter, hashed, numOutputRows)
+      join(streamedIter, hashed, numOutputRows, avgHashProbe)
     }
   }
 
@@ -92,6 +94,23 @@ case class BroadcastHashJoinExec(
   }
 
   /**
+   * Returns the codes used to add a task completion listener to update avg hash probe
+   * at the end of the task.
+   */
+  private def genTaskListener(avgHashProbe: String, relationTerm: String): String = {
+    val listenerClass = classOf[TaskCompletionListener].getName
+    val taskContextClass = classOf[TaskContext].getName
+    s"""
+       | $taskContextClass$$.MODULE$$.get().addTaskCompletionListener(new $listenerClass() {
+       |   @Override
+       |   public void onTaskCompletion($taskContextClass context) {
+       |     $avgHashProbe.set($relationTerm.getAverageProbesPerLookup());
+       |   }
+       | });
+     """.stripMargin
+  }
+
+  /**
    * Returns a tuple of Broadcast of HashedRelation and the variable name for it.
    */
   private def prepareBroadcast(ctx: CodegenContext): (Broadcast[HashedRelation], String) = {
@@ -100,10 +119,16 @@ case class BroadcastHashJoinExec(
     val broadcast = ctx.addReferenceObj("broadcast", broadcastRelation)
     val relationTerm = ctx.freshName("relation")
     val clsName = broadcastRelation.value.getClass.getName
+
+    // At the end of the task, we update the avg hash probe.
+    val avgHashProbe = metricTerm(ctx, "avgHashProbe")
+    val addTaskListener = genTaskListener(avgHashProbe, relationTerm)
+
     ctx.addMutableState(clsName, relationTerm,
       s"""
          | $relationTerm = (($clsName) $broadcast.value()).asReadOnlyCopy();
          | incPeakExecutionMemory($relationTerm.estimatedSize());
+         | $addTaskListener
        """.stripMargin)
     (broadcastRelation, relationTerm)
   }
@@ -468,16 +493,6 @@ case class BroadcastHashJoinExec(
          |$numOutput.add(1);
          |${consume(ctx, resultVar)}
        """.stripMargin
-    }
-  }
-
-  override def computeStats: Statistics = {
-    joinType match {
-      case LeftAnti | LeftSemi =>
-        // LeftSemi and LeftAnti won't ever be bigger than left
-        left.stats
-      case _ =>
-        super.computeStats
     }
   }
 }

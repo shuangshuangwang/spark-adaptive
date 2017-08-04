@@ -36,6 +36,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.{Predicate => GenPredic
 import org.apache.spark.sql.catalyst.plans.QueryPlan
 import org.apache.spark.sql.catalyst.plans.physical._
 import org.apache.spark.sql.execution.metric.SQLMetric
+import org.apache.spark.sql.execution.statsEstimation.{SparkPlanStats, Statistics}
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.util.ThreadUtils
 
@@ -44,7 +45,11 @@ import org.apache.spark.util.ThreadUtils
  *
  * The naming convention is that physical operators end with "Exec" suffix, e.g. [[ProjectExec]].
  */
-abstract class SparkPlan extends QueryPlan[SparkPlan] with Logging with Serializable {
+abstract class SparkPlan
+  extends QueryPlan[SparkPlan]
+    with SparkPlanStats
+    with Logging
+    with Serializable {
 
   /**
    * A handle to the SQL Context that was used to create this plan.   Since many operators need
@@ -70,11 +75,6 @@ abstract class SparkPlan extends QueryPlan[SparkPlan] with Logging with Serializ
     SparkSession.setActiveSession(sqlContext.sparkSession)
     super.makeCopy(newArgs)
   }
-
-  /**
-   * @return Metadata that describes more details of this SparkPlan.
-   */
-  def metadata: Map[String, String] = Map.empty
 
   /**
    * @return All metrics containing metrics of this SparkPlan.
@@ -395,38 +395,6 @@ abstract class SparkPlan extends QueryPlan[SparkPlan] with Logging with Serializ
     }
     newOrdering(order, Seq.empty)
   }
-
-  /** A cache for the estimated statistics, such that it will only be computed once. */
-  private var statsCache: Option[Statistics] = None
-
-  /**
-   * Returns the estimated statistics for the current logical plan node. Under the hood, this
-   * method caches the return value, which is computed based on the configuration passed in the
-   * first time. If the configuration changes, the cache can be invalidated by calling
-   * [[invalidateStatsCache()]].
-   */
-  final def stats: Statistics = statsCache.getOrElse {
-    statsCache = Some(computeStats)
-    statsCache.get
-  }
-
-  /** Invalidates the stats cache. See [[stats]] for more information. */
-  final def invalidateStatsCache(): Unit = {
-    statsCache = None
-    children.foreach(_.invalidateStatsCache())
-  }
-
-  /**
-   * Computes [[Statistics]] for this plan. The default implementation assumes the output
-   * cardinality is the product of all child plan's cardinality, i.e. applies in the case
-   * of cartesian joins.
-    */
-  protected def computeStats: Statistics = {
-    if (children.isEmpty) {
-      throw new UnsupportedOperationException(s"LeafExecNode $nodeName must implement statistics.")
-    }
-    Statistics(sizeInBytes = children.map(_.stats.sizeInBytes).product)
-  }
 }
 
 object SparkPlan {
@@ -437,6 +405,9 @@ object SparkPlan {
 trait LeafExecNode extends SparkPlan {
   override final def children: Seq[SparkPlan] = Nil
   override def producedAttributes: AttributeSet = outputSet
+
+  /** LeafExec nodes that can survive analysis must define their own statistics. */
+  def computeStats(): Statistics = throw new UnsupportedOperationException
 }
 
 object UnaryExecNode {
@@ -450,23 +421,6 @@ trait UnaryExecNode extends SparkPlan {
   def child: SparkPlan
 
   override final def children: Seq[SparkPlan] = child :: Nil
-
-  override def computeStats: Statistics = {
-    // There should be some overhead in Row object, the size should not be zero when there is
-    // no columns, this help to prevent divide-by-zero error.
-    val childRowSize = child.output.map(_.dataType.defaultSize).sum + 8
-    val outputRowSize = output.map(_.dataType.defaultSize).sum + 8
-    // Assume there will be the same number of rows as child has.
-    var sizeInBytes = (child.stats.sizeInBytes * outputRowSize) / childRowSize
-    if (sizeInBytes == 0) {
-      // sizeInBytes can't be zero, or sizeInBytes of BinaryNode will also be zero
-      // (product of children).
-      sizeInBytes = 1
-    }
-
-    // Don't propagate rowCount and attributeStats, since they are not estimated here.
-    Statistics(sizeInBytes = sizeInBytes)
-  }
 }
 
 trait BinaryExecNode extends SparkPlan {

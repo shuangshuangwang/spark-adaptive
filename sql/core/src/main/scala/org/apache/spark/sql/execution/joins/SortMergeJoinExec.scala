@@ -289,6 +289,7 @@ case class SortMergeJoinExec(
                 currentLeftRow = smjScanner.getStreamedRow
                 val currentRightMatches = smjScanner.getBufferedMatches
                 if (currentRightMatches == null || currentRightMatches.length == 0) {
+                  numOutputRows += 1
                   return true
                 }
                 var found = false
@@ -603,16 +604,6 @@ case class SortMergeJoinExec(
        |  if (shouldStop()) return;
        |}
      """.stripMargin
-  }
-
-  override def computeStats: Statistics = {
-    joinType match {
-      case LeftAnti | LeftSemi =>
-        // LeftSemi and LeftAnti won't ever be bigger than left
-        left.stats
-      case _ =>
-        super.computeStats
-    }
   }
 }
 

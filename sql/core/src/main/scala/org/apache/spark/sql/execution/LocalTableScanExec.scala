@@ -21,6 +21,7 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, UnsafeProjection}
 import org.apache.spark.sql.execution.metric.SQLMetrics
+import org.apache.spark.sql.execution.statsEstimation.Statistics
 
 
 /**
@@ -28,12 +29,12 @@ import org.apache.spark.sql.execution.metric.SQLMetrics
  */
 case class LocalTableScanExec(
     output: Seq[Attribute],
-    rows: Seq[InternalRow]) extends LeafExecNode {
+    @transient rows: Seq[InternalRow]) extends LeafExecNode {
 
   override lazy val metrics = Map(
     "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"))
 
-  private lazy val unsafeRows: Array[InternalRow] = {
+  @transient private lazy val unsafeRows: Array[InternalRow] = {
     if (rows.isEmpty) {
       Array.empty
     } else {
@@ -72,5 +73,11 @@ case class LocalTableScanExec(
     val taken = unsafeRows.take(limit)
     longMetric("numOutputRows").add(taken.size)
     taken
+  }
+
+  override def computeStats(): Statistics = {
+    val rowSize = 8 + output.map(_.dataType.defaultSize).sum
+    val rowCount = rows.size
+    Statistics(rowSize * rowCount, Some(rowCount))
   }
 }
