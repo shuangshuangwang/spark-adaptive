@@ -19,7 +19,7 @@ package org.apache.spark.sql.execution
 
 import org.scalatest.BeforeAndAfterAll
 
-import org.apache.spark.{SparkConf, SparkFunSuite}
+import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql._
 import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, SortMergeJoinExec}
 import org.apache.spark.sql.functions._
@@ -45,19 +45,15 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
   }
 
   def withSparkSession(f: SparkSession => Unit): Unit = {
-    val sparkConf =
-      new SparkConf(false)
-        .setMaster("local[*]")
-        .setAppName("test")
-        .set("spark.ui.enabled", "false")
-        .set("spark.driver.allowMultipleContexts", "true")
-        .set(SQLConf.SHUFFLE_PARTITIONS.key, "5")
-        .set(SQLConf.ADAPTIVE_EXECUTION_ENABLED.key, "true")
-        .set(SQLConf.AUTO_BROADCASTJOIN_THRESHOLD.key, "-1")
-        .set(SQLConf.ADAPTIVE_BROADCASTJOIN_THRESHOLD.key, "12000")
-
     val spark = SparkSession.builder()
-      .config(sparkConf)
+      .master("local[*]")
+      .appName("test")
+      .config("spark.ui.enabled", "false")
+      .config("spark.driver.allowMultipleContexts", "true")
+      .config(SQLConf.SHUFFLE_PARTITIONS.key, "5")
+      .config(SQLConf.ADAPTIVE_EXECUTION_ENABLED.key, "true")
+      .config(SQLConf.AUTO_BROADCASTJOIN_THRESHOLD.key, "-1")
+      .config(SQLConf.ADAPTIVE_BROADCASTJOIN_THRESHOLD.key, "12000")
       .getOrCreate()
     try f(spark) finally spark.stop()
   }
@@ -280,9 +276,9 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
       }
       assert(queryStageInputs.length === 2)
 
-      assert(
-        queryStageInputs.map(_.childStage).filter(_.isInstanceOf[ReusedQueryStage]).length === 1)
+      val numReusedQueryStage =
+        queryStageInputs.map(_.childStage).filter(_.isInstanceOf[ReusedQueryStage]).length
+      assert(numReusedQueryStage === 1)
     }
   }
-
 }
