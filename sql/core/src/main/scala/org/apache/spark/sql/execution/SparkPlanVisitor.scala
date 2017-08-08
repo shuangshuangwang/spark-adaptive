@@ -34,7 +34,6 @@ trait SparkPlanVisitor[T] {
     case p: ShuffleExchange => visitShuffleExchange(p)
     case p: SortAggregateExec => visitSortAggregateExec(p)
     case p: SortMergeJoinExec => visitSortMergeJoinExec(p)
-    case p: ReusedQueryStage => visitReusedQueryStage(p)
     case p: QueryStage => visitQueryStage(p)
     case p: SparkPlan => default(p)
   }
@@ -56,6 +55,4 @@ trait SparkPlanVisitor[T] {
   def visitSortMergeJoinExec(p: SortMergeJoinExec): T
 
   def visitQueryStage(p: QueryStage): T
-
-  def visitReusedQueryStage(p: ReusedQueryStage): T
 }

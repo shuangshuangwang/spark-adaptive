@@ -96,10 +96,15 @@ object SparkPlanGraph {
       case "InputAdapter" =>
         buildSparkPlanGraphNode(
           planInfo.children.head, nodeIdGenerator, nodes, edges, parent, null, exchanges)
-      case "QueryStage" | "BroadcastQueryStage" | "ResultQueryStage"
-           | "ShuffleQueryStage | ReusedQueryStage" =>
-        buildSparkPlanGraphNode(
-          planInfo.children.head, nodeIdGenerator, nodes, edges, parent, null, exchanges)
+      case "QueryStage" | "BroadcastQueryStage" | "ResultQueryStage" | "ShuffleQueryStage" =>
+        if (exchanges.contains(planInfo.children.head)) {
+          // Point to the re-used exchange
+          val node = exchanges(planInfo.children.head)
+          edges += SparkPlanGraphEdge(node.id, parent.id)
+        } else {
+          buildSparkPlanGraphNode(
+            planInfo.children.head, nodeIdGenerator, nodes, edges, parent, null, exchanges)
+        }
       case "QueryStageInput" | "ShuffleQueryStageInput" | "BroadcastQueryStageInput" =>
         buildSparkPlanGraphNode(
           planInfo.children.head, nodeIdGenerator, nodes, edges, parent, null, exchanges)

@@ -106,8 +106,4 @@ object SizeInBytesOnlyStatsPlanVisitor extends SparkPlanVisitor[Statistics] {
       p.child.stats
     }
   }
-
-  override def visitReusedQueryStage(p: ReusedQueryStage): Statistics = {
-    p.queryStage.stats
-  }
 }

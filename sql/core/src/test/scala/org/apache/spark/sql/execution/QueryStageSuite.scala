@@ -247,7 +247,7 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
     }
   }
 
-  test("ReusedExchange in adaptive execution") {
+  test("Reuse QueryStage in adaptive execution") {
     withSparkSession { spark: SparkSession =>
       val df = spark.range(0, 1000, 1, numInputPartitions).toDF()
       val join = df.join(df, "id")
@@ -276,9 +276,7 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
       }
       assert(queryStageInputs.length === 2)
 
-      val numReusedQueryStage =
-        queryStageInputs.map(_.childStage).filter(_.isInstanceOf[ReusedQueryStage]).length
-      assert(numReusedQueryStage === 1)
+      assert(queryStageInputs(0).childStage === queryStageInputs(1).childStage)
     }
   }
 }

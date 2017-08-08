@@ -26,9 +26,9 @@ import org.apache.spark.MapOutputStatistics
 import org.apache.spark.broadcast
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.{Attribute, SortOrder}
+import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeMap, Expression, SortOrder}
 import org.apache.spark.sql.catalyst.plans._
-import org.apache.spark.sql.catalyst.plans.physical.{Partitioning, UnknownPartitioning}
+import org.apache.spark.sql.catalyst.plans.physical.{HashPartitioning, Partitioning, UnknownPartitioning}
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.execution.command.ExecutedCommandExec
 import org.apache.spark.sql.execution.exchange._
@@ -46,11 +46,26 @@ abstract class QueryStageInput extends LeafExecNode {
 
   def childStage: QueryStage
 
-  override def output: Seq[Attribute] = childStage.output
+  // Ignore this wrapper for canonicalizing.
+  override lazy val canonicalized: SparkPlan = childStage.canonicalized
 
-  override def outputPartitioning: Partitioning = childStage.outputPartitioning
+  // `QueryStageInput` can have distinct set of output attribute ids from its childStage, we need
+  // to update the attribute ids in `outputPartitioning` and `outputOrdering`.
+  private lazy val updateAttr: Expression => Expression = {
+    val originalAttrToNewAttr = AttributeMap(childStage.output.zip(output))
+    e => e.transform {
+      case attr: Attribute => originalAttrToNewAttr.getOrElse(attr, attr)
+    }
+  }
 
-  override def outputOrdering: Seq[SortOrder] = childStage.outputOrdering
+  override def outputPartitioning: Partitioning = childStage.outputPartitioning match {
+    case h: HashPartitioning => h.copy(expressions = h.expressions.map(updateAttr))
+    case other => other
+  }
+
+  override def outputOrdering: Seq[SortOrder] = {
+    childStage.outputOrdering.map(updateAttr(_).asInstanceOf[SortOrder])
+  }
 
   override def generateTreeString(
       depth: Int,
@@ -69,6 +84,7 @@ abstract class QueryStageInput extends LeafExecNode {
 
 case class ShuffleQueryStageInput(
     childStage: QueryStage,
+    override val output: Seq[Attribute],
     var isLocalShuffle: Boolean = false,
     var specifiedPartitionStartIndices: Option[Array[Int]] = None)
   extends QueryStageInput {
@@ -87,7 +103,9 @@ case class ShuffleQueryStageInput(
   }
 }
 
-case class BroadcastQueryStageInput(childStage: QueryStage)
+case class BroadcastQueryStageInput(
+    childStage: QueryStage,
+    override val output: Seq[Attribute])
   extends QueryStageInput {
 
   override def doExecuteBroadcast[T](): broadcast.Broadcast[T] = {
@@ -108,6 +126,9 @@ abstract class QueryStage extends UnaryExecNode {
 
   def mapOutputStatistics: MapOutputStatistics = _mapOutputStatistics
 
+  // Ignore this wrapper for canonicalizing.
+  override lazy val canonicalized: SparkPlan = child.canonicalized
+
   override def output: Seq[Attribute] = child.output
 
   override def outputPartitioning: Partitioning = child.outputPartitioning
@@ -120,7 +141,7 @@ abstract class QueryStage extends UnaryExecNode {
 
     // Submit shuffle stages
     val shuffleQueryStages: Seq[ShuffleQueryStage] = child.collect {
-      case ShuffleQueryStageInput(queryStage: ShuffleQueryStage, _, _) => queryStage
+      case ShuffleQueryStageInput(queryStage: ShuffleQueryStage, _, _, _) => queryStage
     }
     if (shuffleQueryStages.length > 0) {
       val mapStageThreadPool = ThreadUtils.newDaemonCachedThreadPool("adaptive-submit-stage-pool")
@@ -141,21 +162,9 @@ abstract class QueryStage extends UnaryExecNode {
 
     // Handle broadcast stages
     val broadcastQueryStages: Seq[BroadcastQueryStage] = child.collect {
-      case BroadcastQueryStageInput(queryStage: BroadcastQueryStage) => queryStage
+      case BroadcastQueryStageInput(queryStage: BroadcastQueryStage, _) => queryStage
     }
     broadcastQueryStages.foreach(_.prepareBroadcast)
-
-    // Handle reused stages
-    val reusedQueryStages: Seq[ReusedQueryStage] = child.collect {
-      case ShuffleQueryStageInput(reusedQueryStage: ReusedQueryStage, _, _) => reusedQueryStage
-      case BroadcastQueryStageInput(reusedQueryStage: ReusedQueryStage) => reusedQueryStage
-    }
-    reusedQueryStages.foreach { reusedQueryStage =>
-      val newExchange = reusedQueryStage.queryStage.child.asInstanceOf[Exchange]
-        reusedQueryStage.child = ReusedExchangeExec(
-          reusedQueryStage.child.output,
-          newExchange)
-    }
 
     // Optimize join in this stage based on previous stages' statistics.
     OptimizeJoin(conf).apply(this)
@@ -167,7 +176,7 @@ abstract class QueryStage extends UnaryExecNode {
 
   private var cachedRDD: RDD[InternalRow] = null
 
-  override def doExecute(): RDD[InternalRow] = {
+  override def doExecute(): RDD[InternalRow] = synchronized {
     if (cachedRDD == null) {
       // 1. Execute childStages and optimize the plan in this stage
       executeChildStages()
@@ -238,7 +247,7 @@ case class BroadcastQueryStage(var child: SparkPlan) extends QueryStage {
     child.executeBroadcast()
   }
 
-  def prepareBroadcast() : Unit = {
+  def prepareBroadcast() : Unit = synchronized {
     executeChildStages()
     child = CollapseCodegenStages(sqlContext.conf).apply(child)
   }
@@ -247,21 +256,6 @@ case class BroadcastQueryStage(var child: SparkPlan) extends QueryStage {
     throw new UnsupportedOperationException(
       "BroadcastExchange does not support the execute() code path.")
   }
-}
-
-case class ReusedQueryStage(
-    var child: SparkPlan,
-    queryStage: QueryStage) extends QueryStage {
-
-  override def doExecuteBroadcast[T](): broadcast.Broadcast[T] = {
-    child.executeBroadcast()
-  }
-
-  override def doExecute(): RDD[InternalRow] = {
-    child.execute()
-  }
-
-  override def mapOutputStatistics: MapOutputStatistics = queryStage.mapOutputStatistics
 }
 
 case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
@@ -374,18 +368,18 @@ case class PlanQueryStage(conf: SQLConf) extends Rule[SparkPlan] {
         if (samePlan.isDefined) {
           // Keep the output of this exchange, the following plans require that to resolve
           // attributes.
-          val reusedExchange =
-            ReusedExchangeExec(exchange.output, samePlan.get.child.asInstanceOf[Exchange])
           exchange match {
             case e: ShuffleExchange =>
-              ShuffleQueryStageInput(ReusedQueryStage(reusedExchange, samePlan.get))
+              ShuffleQueryStageInput(ShuffleQueryStage(samePlan.get.child), exchange.output)
             case e: BroadcastExchangeExec =>
-              BroadcastQueryStageInput(ReusedQueryStage(reusedExchange, samePlan.get))
+              BroadcastQueryStageInput(BroadcastQueryStage(samePlan.get.child), exchange.output)
           }
         } else {
           val queryStageInput = exchange match {
-            case e: ShuffleExchange => ShuffleQueryStageInput(ShuffleQueryStage(e))
-            case e: BroadcastExchangeExec => BroadcastQueryStageInput(BroadcastQueryStage(e))
+            case e: ShuffleExchange =>
+              ShuffleQueryStageInput(ShuffleQueryStage(e), e.output)
+            case e: BroadcastExchangeExec =>
+              BroadcastQueryStageInput(BroadcastQueryStage(e), e.output)
           }
           sameSchema += queryStageInput.childStage
           queryStageInput
