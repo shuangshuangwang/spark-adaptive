@@ -135,12 +135,6 @@ abstract class QueryStage extends UnaryExecNode {
 
   override def outputOrdering: Seq[SortOrder] = child.outputOrdering
 
-  override def executeCollect(): Array[InternalRow] = child.executeCollect()
-
-  override def executeToIterator: Iterator[InternalRow] = child.executeToIterator
-
-  override def executeTake(limit: Int): Array[InternalRow] = child.executeTake(limit)
-
   def executeChildStages(): Unit = {
     // Execute childStages. Use a thread pool to avoid blocking on one child stage.
     val executionId = sqlContext.sparkContext.getLocalProperty(SQLExecution.EXECUTION_ID_KEY)
