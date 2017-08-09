@@ -91,7 +91,7 @@ case class ShuffleQueryStageInput(
 
   override def outputPartitioning: Partitioning = specifiedPartitionStartIndices.map {
     indices => UnknownPartitioning(indices.length)
-  }.getOrElse(childStage.outputPartitioning)
+  }.getOrElse(super.outputPartitioning)
 
   override def doExecute(): RDD[InternalRow] = {
     val childRDD = childStage.execute().asInstanceOf[ShuffledRowRDD]
@@ -134,6 +134,12 @@ abstract class QueryStage extends UnaryExecNode {
   override def outputPartitioning: Partitioning = child.outputPartitioning
 
   override def outputOrdering: Seq[SortOrder] = child.outputOrdering
+
+  override def executeCollect(): Array[InternalRow] = child.executeCollect()
+
+  override def executeToIterator: Iterator[InternalRow] = child.executeToIterator
+
+  override def executeTake(limit: Int): Array[InternalRow] = child.executeTake(limit)
 
   def executeChildStages(): Unit = {
     // Execute childStages. Use a thread pool to avoid blocking on one child stage.
@@ -247,9 +253,14 @@ case class BroadcastQueryStage(var child: SparkPlan) extends QueryStage {
     child.executeBroadcast()
   }
 
+  private var prepared = false
+
   def prepareBroadcast() : Unit = synchronized {
-    executeChildStages()
-    child = CollapseCodegenStages(sqlContext.conf).apply(child)
+    if (!prepared) {
+      executeChildStages()
+      child = CollapseCodegenStages(sqlContext.conf).apply(child)
+      prepared = true
+    }
   }
 
   override def doExecute(): RDD[InternalRow] = {
@@ -370,9 +381,9 @@ case class PlanQueryStage(conf: SQLConf) extends Rule[SparkPlan] {
           // attributes.
           exchange match {
             case e: ShuffleExchange =>
-              ShuffleQueryStageInput(ShuffleQueryStage(samePlan.get.child), exchange.output)
+              ShuffleQueryStageInput(samePlan.get, exchange.output)
             case e: BroadcastExchangeExec =>
-              BroadcastQueryStageInput(BroadcastQueryStage(samePlan.get.child), exchange.output)
+              BroadcastQueryStageInput(samePlan.get, exchange.output)
           }
         } else {
           val queryStageInput = exchange match {
