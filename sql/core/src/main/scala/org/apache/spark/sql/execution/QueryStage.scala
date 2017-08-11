@@ -139,37 +139,45 @@ abstract class QueryStage extends UnaryExecNode {
     // Execute childStages. Use a thread pool to avoid blocking on one child stage.
     val executionId = sqlContext.sparkContext.getLocalProperty(SQLExecution.EXECUTION_ID_KEY)
 
-    // Submit shuffle stages
-    val shuffleQueryStages: Seq[ShuffleQueryStage] = child.collect {
-      case ShuffleQueryStageInput(queryStage: ShuffleQueryStage, _, _, _) => queryStage
-    }
-    if (shuffleQueryStages.length > 0) {
-      val mapStageThreadPool = ThreadUtils.newDaemonCachedThreadPool("adaptive-submit-stage-pool")
-      var submitStageTasks = mutable.ArrayBuffer[Future[_]]()
-      shuffleQueryStages.foreach { queryStage =>
-        submitStageTasks += mapStageThreadPool.submit(
-          new Runnable {
-            override def run(): Unit = {
-              SQLExecution.withExecutionId(sqlContext.sparkContext, executionId) {
-                queryStage.execute()
-              }
-            }
-          })
-      }
-      submitStageTasks.foreach(_.get())
-      mapStageThreadPool.shutdown()
-    }
+    val queryStageSubmitTasks = mutable.ArrayBuffer[Future[_]]()
 
     // Handle broadcast stages
     val broadcastQueryStages: Seq[BroadcastQueryStage] = child.collect {
       case BroadcastQueryStageInput(queryStage: BroadcastQueryStage, _) => queryStage
     }
-    broadcastQueryStages.foreach(_.prepareBroadcast)
+    broadcastQueryStages.foreach { queryStage =>
+      queryStageSubmitTasks += QueryStage.queryStageThreadPool.submit(
+        new Runnable {
+          override def run(): Unit = {
+            queryStage.prepareBroadcast()
+          }
+        })
+    }
+
+    // Submit shuffle stages
+    val shuffleQueryStages: Seq[ShuffleQueryStage] = child.collect {
+      case ShuffleQueryStageInput(queryStage: ShuffleQueryStage, _, _, _) => queryStage
+    }
+    shuffleQueryStages.foreach { queryStage =>
+      queryStageSubmitTasks += QueryStage.queryStageThreadPool.submit(
+        new Runnable {
+          override def run(): Unit = {
+            SQLExecution.withExecutionId(sqlContext.sparkContext, executionId) {
+              queryStage.execute()
+            }
+          }
+        })
+    }
+
+    queryStageSubmitTasks.foreach(_.get())
 
     // Optimize join in this stage based on previous stages' statistics.
+    val oldChild = child
     OptimizeJoin(conf).apply(this)
     // If the Joins are changed, we need apply EnsureRequirements rule to add BroadcastExchange.
-    child = EnsureRequirements(conf).apply(child)
+    if (!oldChild.fastEquals(child)) {
+      child = EnsureRequirements(conf).apply(child)
+    }
   }
 
   def executeStage(): RDD[InternalRow] = child.execute()
@@ -227,6 +235,11 @@ abstract class QueryStage extends UnaryExecNode {
   }
 }
 
+object QueryStage {
+  lazy val queryStageThreadPool =
+    ThreadUtils.newDaemonCachedThreadPool("adaptive-query-stage-pool")
+}
+
 case class ResultQueryStage(var child: SparkPlan) extends QueryStage
 
 case class ShuffleQueryStage(var child: SparkPlan) extends QueryStage {
@@ -253,6 +266,8 @@ case class BroadcastQueryStage(var child: SparkPlan) extends QueryStage {
     if (!prepared) {
       executeChildStages()
       child = CollapseCodegenStages(sqlContext.conf).apply(child)
+      // After child stages are completed, prepare() triggers the broadcast.
+      prepare()
       prepared = true
     }
   }
