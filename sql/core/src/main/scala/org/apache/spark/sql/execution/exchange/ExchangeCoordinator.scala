@@ -20,6 +20,7 @@ package org.apache.spark.sql.execution.exchange
 import java.util.{HashMap => JHashMap, Map => JMap}
 import javax.annotation.concurrent.GuardedBy
 
+import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
 import org.apache.spark.{MapOutputStatistics, ShuffleDependency, SimpleFutureAction}
@@ -159,6 +160,100 @@ class ExchangeCoordinator(
     }
 
     partitionStartIndices.toArray
+  }
+
+  def estimatePartitionStartEndIndices(
+      mapOutputStatistics: Array[MapOutputStatistics],
+      omittedPartitions: mutable.HashSet[Int]): (Array[Int], Array[Int]) = {
+
+    assert(mapOutputStatistics.length == 2,
+      "There should be only two map outputs when handling skewed join.")
+
+    assert(omittedPartitions.size < mapOutputStatistics(0).bytesByPartitionId.length,
+      "All partitions are skewed.")
+
+    // If minNumPostShufflePartitions is defined, it is possible that we need to use a
+    // value less than advisoryTargetPostShuffleInputSize as the target input size of
+    // a post shuffle task.
+    val targetPostShuffleInputSize = minNumPostShufflePartitions match {
+      case Some(numPartitions) =>
+        val totalPostShuffleInputSize = mapOutputStatistics.map(_.bytesByPartitionId.sum).sum
+        // The max at here is to make sure that when we have an empty table, we
+        // only have a single post-shuffle partition.
+        // There is no particular reason that we pick 16. We just need a number to
+        // prevent maxPostShuffleInputSize from being set to 0.
+        val maxPostShuffleInputSize =
+          math.max(math.ceil(totalPostShuffleInputSize / numPartitions.toDouble).toLong, 16)
+        math.min(maxPostShuffleInputSize, advisoryTargetPostShuffleInputSize)
+
+      case None => advisoryTargetPostShuffleInputSize
+    }
+
+    logInfo(
+      s"advisoryTargetPostShuffleInputSize: $advisoryTargetPostShuffleInputSize, " +
+      s"targetPostShuffleInputSize $targetPostShuffleInputSize.")
+
+    // Make sure we do get the same number of pre-shuffle partitions for those stages.
+    val distinctNumPreShufflePartitions =
+      mapOutputStatistics.map(stats => stats.bytesByPartitionId.length).distinct
+    // The reason that we are expecting a single value of the number of pre-shuffle partitions
+    // is that when we add Exchanges, we set the number of pre-shuffle partitions
+    // (i.e. map output partitions) using a static setting, which is the value of
+    // spark.sql.shuffle.partitions. Even if two input RDDs are having different
+    // number of partitions, they will have the same number of pre-shuffle partitions
+    // (i.e. map output partitions).
+    assert(
+      distinctNumPreShufflePartitions.length == 1,
+      "There should be only one distinct value of the number pre-shuffle partitions " +
+        "among registered Exchange operator.")
+    val numPreShufflePartitions = distinctNumPreShufflePartitions.head
+
+    val partitionStartIndices = ArrayBuffer[Int]()
+    val partitionEndIndices = ArrayBuffer[Int]()
+
+    def nextStartIndice(i: Int): Int = {
+      var index = i
+      while (index < numPreShufflePartitions && omittedPartitions.contains(index)) {
+        index = index + 1
+      }
+      index
+    }
+
+    def shufflePartitionSize(partitionId: Int): Long = {
+      var size = 0L
+      var j = 0
+      while (j < mapOutputStatistics.length) {
+        size += mapOutputStatistics(j).bytesByPartitionId(partitionId)
+        j += 1
+      }
+      size
+    }
+
+    val firstStartIndice = nextStartIndice(0)
+    partitionStartIndices += firstStartIndice
+    var postShuffleInputSize = shufflePartitionSize(firstStartIndice)
+
+    var i = firstStartIndice
+    var nextIndice = nextStartIndice(i + 1)
+    while (nextIndice < numPreShufflePartitions) {
+      val nextShuffleInputSize = shufflePartitionSize(nextIndice)
+      // If the next partition is omitted, or including the nextShuffleInputSize would exceed the
+      // target partition size, then start a new partition.
+      if (nextIndice != i + 1 ||
+        postShuffleInputSize +  nextShuffleInputSize > targetPostShuffleInputSize) {
+        partitionEndIndices += i + 1
+        partitionStartIndices += nextIndice
+        postShuffleInputSize = nextShuffleInputSize
+        i = nextIndice
+      } else {
+        postShuffleInputSize += nextShuffleInputSize
+        i += 1
+      }
+      nextIndice = nextStartIndice(nextIndice + 1)
+    }
+    partitionEndIndices += nextIndice
+
+    (partitionStartIndices.toArray, partitionEndIndices.toArray)
   }
 
   override def toString: String = {
