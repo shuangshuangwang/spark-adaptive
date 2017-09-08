@@ -296,16 +296,17 @@ private[spark] abstract class MapOutputTracker(conf: SparkConf) extends Logging 
       : Seq[(BlockManagerId, Seq[(BlockId, Long)])]
 
   /**
-   * Called from executors to get the server URIs and output sizes for each shuffle block that
-   * needs to be read from a given range of map output partitions (startPartition is included but
-   * endPartition is excluded from the range) and a given map Id.
-   *
-   * @return A sequence of 2-item tuples, where the first item in the tuple is a BlockManagerId,
-   *         and the second item is a sequence of (shuffle block id, shuffle block size) tuples
-   *         describing the shuffle blocks that are stored at that block manager.
-   */
-  def getMapSizesByExecutorId(shuffleId: Int, startPartition: Int, endPartition: Int, mapId: Int)
-      : Seq[(BlockManagerId, Seq[(BlockId, Long)])]
+    * Called from executors to get the server URIs and output sizes for each shuffle block that
+    * needs to be read from a given range of map output partitions (startPartition is included but
+    * endPartition is excluded from the range) and a given start map Id and end map Id.
+    *
+    * @return A sequence of 2-item tuples, where the first item in the tuple is a BlockManagerId,
+    *         and the second item is a sequence of (shuffle block id, shuffle block size) tuples
+    *         describing the shuffle blocks that are stored at that block manager.
+    */
+  def getMapSizesByExecutorId(
+      shuffleId: Int, startPartition: Int, endPartition: Int, startMapId: Int, endMapId: Int)
+          : Seq[(BlockManagerId, Seq[(BlockId, Long)])]
 
   /**
    * Deletes map output status information for the specified shuffle stage.
@@ -635,8 +636,9 @@ private[spark] class MapOutputTrackerMaster(
       shuffleId: Int,
       startPartition: Int,
       endPartition: Int,
-      mapId: Int) : Seq[(BlockManagerId, Seq[(BlockId, Long)])] = {
-    logDebug(s"Fetching outputs for shuffle $shuffleId, mapId $mapId" +
+      startMapId: Int,
+      endMapId: Int) : Seq[(BlockManagerId, Seq[(BlockId, Long)])] = {
+    logDebug(s"Fetching outputs for shuffle $shuffleId, startMapId $startMapId endMapId $endMapId" +
       s"partitions $startPartition-$endPartition")
     shuffleStatuses.get(shuffleId) match {
       case Some (shuffleStatus) =>
@@ -646,7 +648,8 @@ private[spark] class MapOutputTrackerMaster(
             startPartition,
             endPartition,
             statuses,
-            mapId)
+            startMapId,
+            endMapId)
         }
       case None =>
         Seq.empty
@@ -660,6 +663,7 @@ private[spark] class MapOutputTrackerMaster(
     trackerEndpoint = null
     shuffleStatuses.clear()
   }
+
 }
 
 /**
@@ -694,12 +698,14 @@ private[spark] class MapOutputTrackerWorker(conf: SparkConf) extends MapOutputTr
       shuffleId: Int,
       startPartition: Int,
       endPartition: Int,
-      mapId: Int) : Seq[(BlockManagerId, Seq[(BlockId, Long)])] = {
-    logDebug(s"Fetching outputs for shuffle $shuffleId, mapId $mapId" +
+      startMapId: Int,
+      endMapId: Int) : Seq[(BlockManagerId, Seq[(BlockId, Long)])] = {
+    logDebug(s"Fetching outputs for shuffle $shuffleId, startMapId $startMapId endMapId $endMapId" +
       s"partitions $startPartition-$endPartition")
     val statuses = getStatuses(shuffleId)
     try {
-      MapOutputTracker.convertMapStatuses(shuffleId, startPartition, endPartition, statuses, mapId)
+      MapOutputTracker.convertMapStatuses(
+        shuffleId, startPartition, endPartition, statuses, startMapId, endMapId)
     } catch {
       case e: MetadataFetchFailedException =>
         // We experienced a fetch failure so our mapStatuses cache is outdated; clear it:
@@ -924,17 +930,47 @@ private[spark] object MapOutputTracker extends Logging {
       endPartition: Int,
       statuses: Array[MapStatus],
       mapId: Int): Seq[(BlockManagerId, Seq[(BlockId, Long)])] = {
-    assert (statuses != null && statuses.length > mapId)
+    convertMapStatuses(shuffleId, startPartition, endPartition, statuses, mapId, mapId)
+  }
+
+  /**
+    * Given an array of map statuses, the start map Id, end map Id and a range of map output
+    * partitions, returns a sequence that, lists the shuffle block IDs and corresponding shuffle
+    * block sizes stored at that block manager.
+    *
+    * If the status of the map is null (indicating a missing location due to a failed mapper),
+    * throws a FetchFailedException.
+    *
+    * @param shuffleId Identifier for the shuffle
+    * @param startPartition Start of map output partition ID range (included in range)
+    * @param endPartition End of map output partition ID range (excluded from range)
+    * @param statuses List of map statuses, indexed by map ID.
+    * @param startMapId Index of the start map status
+    * @param endMapId Index of the end map status
+    * @return A sequence of 2-item tuples, where the first item in the tuple is a BlockManagerId,
+    *         and the second item is a sequence of (shuffle block ID, shuffle block size) tuples
+    *         describing the shuffle blocks that are stored at that block manager.
+    */
+  def convertMapStatuses(
+      shuffleId: Int,
+      startPartition: Int,
+      endPartition: Int,
+      statuses: Array[MapStatus],
+      startMapId: Int,
+      endMapId: Int): Seq[(BlockManagerId, Seq[(BlockId, Long)])] = {
+    assert (statuses != null && statuses.length > endMapId)
     val splitsByAddress = new HashMap[BlockManagerId, ArrayBuffer[(BlockId, Long)]]
-    val status = statuses(mapId)
-    if (status == null) {
-      val errorMessage = s"Missing an output location for shuffle $shuffleId"
-      logError(errorMessage)
-      throw new MetadataFetchFailedException(shuffleId, startPartition, errorMessage)
-    } else {
-      for (part <- startPartition until endPartition) {
-        splitsByAddress.getOrElseUpdate(status.location, ArrayBuffer()) +=
-          ((ShuffleBlockId(shuffleId, mapId, part), status.getSizeForBlock(part)))
+    val statusesPicked = statuses.drop(startMapId).dropRight(statuses.length - endMapId)
+    for ((status, mapId) <- statusesPicked.zipWithIndex) {
+      if (status == null) {
+        val errorMessage = s"Missing an output location for shuffle $shuffleId"
+        logError(errorMessage)
+        throw new MetadataFetchFailedException(shuffleId, startPartition, errorMessage)
+      } else {
+        for (part <- startPartition until endPartition) {
+          splitsByAddress.getOrElseUpdate(status.location, ArrayBuffer()) +=
+            ((ShuffleBlockId(shuffleId, mapId, part), status.getSizeForBlock(part)))
+        }
       }
     }
 
