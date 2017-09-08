@@ -158,7 +158,7 @@ abstract class QueryStage extends UnaryExecNode {
 
     // Submit shuffle stages
     val shuffleQueryStages: Seq[ShuffleQueryStage] = child.collect {
-      case ShuffleQueryStageInput(queryStage: ShuffleQueryStage, _, _, _) => queryStage
+      case ShuffleQueryStageInput(queryStage: ShuffleQueryStage, _, _, _, _, _) => queryStage
     }
     shuffleQueryStages.foreach { queryStage =>
       queryStageSubmitTasks += QueryStage.queryStageThreadPool.submit(
@@ -388,82 +388,70 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
 case class HandleSkewedJoin(conf: SQLConf) extends Rule[SparkPlan] {
 
   private def skewedPartitions(plan: SparkPlan): Seq[Int] = {
-    //TODO implement this when the plan.stats has the info
-    Seq(0, 2)
+    // TODO implement this when the plan.stats has the info
+    Seq.empty[Int]
   }
 
   private def canBroadcast(plan: SparkPlan, partitionId: Int): Boolean = {
-    //TODO fix this
+    // TODO fix this
     plan.stats.sizeInBytes >= 0 && plan.stats.sizeInBytes <= conf.adaptiveBroadcastJoinThreshold
-  }
-
-  private def handleSkewedSortMergeJoin(
-      smj: SortMergeJoinExec,
-      queryStage: QueryStage): SparkPlan = {
-    smj match {
-      case SortMergeJoinExec(leftKeys, rightKeys, joinType, condition,
-        SortExec(_, _, left: ShuffleQueryStageInput, _),
-        SortExec(_, _, right: ShuffleQueryStageInput, _)) =>
-        val skewedPartitionsInLeft = skewedPartitions(left)
-        val skewedPartitionsInRight = skewedPartitions(right)
-        val handledPartitions = mutable.HashSet[Int]()
-        val subJoins = mutable.ArrayBuffer[SparkPlan](smj)
-        skewedPartitionsInLeft.foreach { p =>
-          if (canBroadcast(right, p)) {
-            handledPartitions += p
-            val leftInput =
-              ShuffleQueryStageInput(
-                left.childStage,
-                left.output,
-                partitionStartIndices = Some(Array(p)),
-                partitionEndIndices = Some(Array(p + 1)))
-            val rightInput =
-              ShuffleQueryStageInput(
-                right.childStage,
-                right.output,
-                partitionStartIndices = Some(Array(p)),
-                partitionEndIndices = Some(Array(p + 1)))
-            subJoins += BroadcastHashJoinExec(
-              leftKeys, rightKeys, joinType, joins.BuildRight, condition, leftInput, rightInput)
-          }
-        }
-        skewedPartitionsInRight.foreach { p =>
-          if (!handledPartitions.contains(p) && canBroadcast(left, p)) {
-            handledPartitions += p
-            val leftInput =
-              ShuffleQueryStageInput(
-                left.childStage,
-                left.output,
-                partitionStartIndices = Some(Array(p)),
-                partitionEndIndices = Some(Array(p + 1)))
-            val rightInput =
-              ShuffleQueryStageInput(
-                right.childStage,
-                right.output,
-                partitionStartIndices = Some(Array(p)),
-                partitionEndIndices = Some(Array(p + 1)))
-            subJoins += BroadcastHashJoinExec(
-              leftKeys, rightKeys, joinType, joins.BuildLeft, condition, leftInput, rightInput)
-          }
-        }
-        left.skewedPartitions = Some(handledPartitions)
-        right.skewedPartitions = Some(handledPartitions)
-        UnionExec(subJoins.toList)
-    }
   }
 
   private def handleSkewedJoin(
       operator: SparkPlan,
-      queryStage: QueryStage): SparkPlan = {
-    operator match {
-      case smj: SortMergeJoinExec =>
-        val op = handleSkewedSortMergeJoin(smj, queryStage)
-        val optimizedChildren = op.children.map(handleSkewedJoin(_, queryStage))
-        op.withNewChildren(optimizedChildren)
-      case op =>
-        val optimizedChildren = op.children.map(handleSkewedJoin(_, queryStage))
-        op.withNewChildren(optimizedChildren)
-    }
+      queryStage: QueryStage): SparkPlan = operator.transformUp {
+    case smj @ SortMergeJoinExec(leftKeys, rightKeys, joinType, condition,
+      SortExec(_, _, left: ShuffleQueryStageInput, _),
+      SortExec(_, _, right: ShuffleQueryStageInput, _)) =>
+      val skewedPartitionsInLeft = skewedPartitions(left)
+      val skewedPartitionsInRight = skewedPartitions(right)
+      val handledPartitions = mutable.HashSet[Int]()
+      val subJoins = mutable.ArrayBuffer[SparkPlan](smj)
+      skewedPartitionsInLeft.foreach { p =>
+        if (canBroadcast(right, p)) {
+          handledPartitions += p
+          val leftInput =
+            ShuffleQueryStageInput(
+              left.childStage,
+              left.output,
+              partitionStartIndices = Some(Array(p)),
+              partitionEndIndices = Some(Array(p + 1)))
+          val rightInput =
+            ShuffleQueryStageInput(
+              right.childStage,
+              right.output,
+              partitionStartIndices = Some(Array(p)),
+              partitionEndIndices = Some(Array(p + 1)))
+          subJoins += BroadcastHashJoinExec(
+            leftKeys, rightKeys, joinType, joins.BuildRight, condition, leftInput, rightInput)
+        }
+      }
+      skewedPartitionsInRight.foreach { p =>
+        if (!handledPartitions.contains(p) && canBroadcast(left, p)) {
+          handledPartitions += p
+          val leftInput =
+            ShuffleQueryStageInput(
+              left.childStage,
+              left.output,
+              partitionStartIndices = Some(Array(p)),
+              partitionEndIndices = Some(Array(p + 1)))
+          val rightInput =
+            ShuffleQueryStageInput(
+              right.childStage,
+              right.output,
+              partitionStartIndices = Some(Array(p)),
+              partitionEndIndices = Some(Array(p + 1)))
+          subJoins += BroadcastHashJoinExec(
+            leftKeys, rightKeys, joinType, joins.BuildLeft, condition, leftInput, rightInput)
+        }
+      }
+      if (handledPartitions.size > 0) {
+        left.skewedPartitions = Some(handledPartitions)
+        right.skewedPartitions = Some(handledPartitions)
+        UnionExec(subJoins.toList)
+      } else {
+        smj
+      }
   }
 
   def apply(plan: SparkPlan): SparkPlan = plan match {

@@ -251,7 +251,7 @@ class ExchangeCoordinator(
       }
       nextIndice = nextStartIndice(nextIndice + 1)
     }
-    partitionEndIndices += nextIndice
+    partitionEndIndices += i + 1
 
     (partitionStartIndices.toArray, partitionEndIndices.toArray)
   }

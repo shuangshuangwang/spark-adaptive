@@ -126,11 +126,6 @@ class ShuffledRowRDD(
       (0 until numPreShufflePartitions).toArray
   }
 
-  private[this] val partitionEndIndices: Array[Int] = specifiedPartitionEndIndices match {
-    case Some(indices) => indices
-    case None => partitionStartIndices.map(_ + 1)
-  }
-
   override def getDependencies: Seq[Dependency[_]] = List(dependency)
 
   override val partitioner: Option[Partitioner] = specifiedPartitionEndIndices match {
@@ -142,7 +137,14 @@ class ShuffledRowRDD(
     // assert(partitionStartIndices.length == part.numPartitions)
     Array.tabulate[Partition](partitionStartIndices.length) { i =>
       val startIndex = partitionStartIndices(i)
-      val endIndex = partitionEndIndices(i)
+      val endIndex = specifiedPartitionEndIndices match {
+        case Some(indices) => indices(i)
+        case None => if (i < partitionStartIndices.length - 1) {
+          partitionStartIndices(i + 1)
+        } else {
+          numPreShufflePartitions
+        }
+      }
       new ShuffledRowRDDPartition(i, startIndex, endIndex)
     }
   }
