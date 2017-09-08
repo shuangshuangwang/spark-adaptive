@@ -490,12 +490,14 @@ private[spark] class MapOutputTrackerMaster(
   def getStatistics(dep: ShuffleDependency[_, _, _]): MapOutputStatistics = {
     shuffleStatuses(dep.shuffleId).withMapStatuses { statuses =>
       val totalSizes = new Array[Long](dep.partitioner.numPartitions)
+      val totalRows = new Array[Long](dep.partitioner.numPartitions)
       for (s <- statuses) {
         for (i <- 0 until totalSizes.length) {
           totalSizes(i) += s.getSizeForBlock(i)
+          totalRows(i) += s.getRowForBlock(i)
         }
       }
-      new MapOutputStatistics(dep.shuffleId, totalSizes)
+      new MapOutputStatistics(dep.shuffleId, totalSizes, totalRows)
     }
   }
 
