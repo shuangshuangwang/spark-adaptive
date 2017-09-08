@@ -663,7 +663,6 @@ private[spark] class MapOutputTrackerMaster(
     trackerEndpoint = null
     shuffleStatuses.clear()
   }
-
 }
 
 /**
@@ -908,32 +907,6 @@ private[spark] object MapOutputTracker extends Logging {
   }
 
   /**
-   * Given an array of map statuses, the map Id and a range of map output partitions, returns a
-   * sequence that, lists the shuffle block IDs and corresponding shuffle block sizes stored at
-   * that block manager.
-   *
-   * If the status of the map is null (indicating a missing location due to a failed mapper),
-   * throws a FetchFailedException.
-   *
-   * @param shuffleId Identifier for the shuffle
-   * @param startPartition Start of map output partition ID range (included in range)
-   * @param endPartition End of map output partition ID range (excluded from range)
-   * @param statuses List of map statuses, indexed by map ID.
-   * @param mapId Index of the map status
-   * @return A sequence of 2-item tuples, where the first item in the tuple is a BlockManagerId,
-   *         and the second item is a sequence of (shuffle block ID, shuffle block size) tuples
-   *         describing the shuffle blocks that are stored at that block manager.
-   */
-  def convertMapStatuses(
-      shuffleId: Int,
-      startPartition: Int,
-      endPartition: Int,
-      statuses: Array[MapStatus],
-      mapId: Int): Seq[(BlockManagerId, Seq[(BlockId, Long)])] = {
-    convertMapStatuses(shuffleId, startPartition, endPartition, statuses, mapId, mapId)
-  }
-
-  /**
     * Given an array of map statuses, the start map Id, end map Id and a range of map output
     * partitions, returns a sequence that, lists the shuffle block IDs and corresponding shuffle
     * block sizes stored at that block manager.
@@ -945,8 +918,8 @@ private[spark] object MapOutputTracker extends Logging {
     * @param startPartition Start of map output partition ID range (included in range)
     * @param endPartition End of map output partition ID range (excluded from range)
     * @param statuses List of map statuses, indexed by map ID.
-    * @param startMapId Index of the start map status
-    * @param endMapId Index of the end map status
+    * @param startMapId Start of map Id range (included in range)
+    * @param endMapId End of map Id (excluded from range)
     * @return A sequence of 2-item tuples, where the first item in the tuple is a BlockManagerId,
     *         and the second item is a sequence of (shuffle block ID, shuffle block size) tuples
     *         describing the shuffle blocks that are stored at that block manager.
@@ -960,7 +933,7 @@ private[spark] object MapOutputTracker extends Logging {
       endMapId: Int): Seq[(BlockManagerId, Seq[(BlockId, Long)])] = {
     assert (statuses != null && statuses.length > endMapId)
     val splitsByAddress = new HashMap[BlockManagerId, ArrayBuffer[(BlockId, Long)]]
-    val statusesPicked = statuses.drop(startMapId).dropRight(statuses.length - endMapId)
+    val statusesPicked = statuses.drop(startMapId).dropRight(statuses.length - endMapId + 1)
     for ((status, mapId) <- statusesPicked.zipWithIndex) {
       if (status == null) {
         val errorMessage = s"Missing an output location for shuffle $shuffleId"
