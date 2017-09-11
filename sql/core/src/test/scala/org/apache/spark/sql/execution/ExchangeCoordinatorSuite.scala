@@ -331,17 +331,6 @@ class ExchangeCoordinatorSuite extends SparkFunSuite with BeforeAndAfterAll {
         expectedPartitionStartIndices,
         expectedPartitionEndIndices)
     }
-
-    {
-      // All pairs of pre-shuffle partitions are larger than the targeted size.
-      val bytesByPartitionId1 = Array[Long](100, 100, 40, 30, 0)
-      val bytesByPartitionId2 = Array[Long](30, 0, 60, 70, 110)
-      val expectedPartitionStartIndices = Array[Int](0, 1, 2, 3, 4)
-      checkEstimation(
-        coordinator,
-        Array(bytesByPartitionId1, bytesByPartitionId2),
-        expectedPartitionStartIndices)
-    }
   }
 
   ///////////////////////////////////////////////////////////////////////////

@@ -44,7 +44,7 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
     originalInstantiatedSparkSession.foreach(ctx => SparkSession.setDefaultSession(ctx))
   }
 
-  def withSparkSession(f: SparkSession => Unit): Unit = {
+  def defaultSparkSession(): SparkSession = {
     val spark = SparkSession.builder()
       .master("local[*]")
       .appName("test")
@@ -55,6 +55,10 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
       .config(SQLConf.AUTO_BROADCASTJOIN_THRESHOLD.key, "-1")
       .config(SQLConf.ADAPTIVE_BROADCASTJOIN_THRESHOLD.key, "12000")
       .getOrCreate()
+    spark
+  }
+
+  def withSparkSession(spark: SparkSession)(f: SparkSession => Unit): Unit = {
     try f(spark) finally spark.stop()
   }
 
@@ -68,7 +72,7 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
   }
 
   test("1 sort merge join to broadcast join") {
-    withSparkSession { spark: SparkSession =>
+    withSparkSession(defaultSparkSession) { spark: SparkSession =>
       val df1 =
         spark
           .range(0, 1000, 1, numInputPartitions)
@@ -126,7 +130,7 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
     //        Ex    Ex   t3
     //       /       \
     //      t1       t2
-    withSparkSession { spark: SparkSession =>
+    withSparkSession(defaultSparkSession) { spark: SparkSession =>
       val df1 =
         spark
           .range(0, 1000, 1, numInputPartitions)
@@ -192,7 +196,7 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
     //        Ex    Ex   t3
     //       /       \
     //      t1       t2
-    withSparkSession { spark: SparkSession =>
+    withSparkSession(defaultSparkSession) { spark: SparkSession =>
       val df1 =
         spark
           .range(0, 1000, 1, numInputPartitions)
@@ -248,7 +252,7 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
   }
 
   test("Reuse QueryStage in adaptive execution") {
-    withSparkSession { spark: SparkSession =>
+    withSparkSession(defaultSparkSession) { spark: SparkSession =>
       val df = spark.range(0, 1000, 1, numInputPartitions).toDF()
       val join = df.join(df, "id")
 
@@ -277,6 +281,55 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
       assert(queryStageInputs.length === 2)
 
       assert(queryStageInputs(0).childStage === queryStageInputs(1).childStage)
+    }
+  }
+
+  test("adaptive skewed join") {
+    val spark = defaultSparkSession
+    spark.conf.set(SQLConf.ADAPTIVE_EXECUTION_JOIN_ENABLED.key, "false")
+    withSparkSession(spark) { spark: SparkSession =>
+      val df1 =
+        spark
+          .range(0, 10, 1, 2)
+          .selectExpr("id % 5 as key1", "id as value1")
+      val df2 =
+        spark
+          .range(0, 1000, 1, numInputPartitions)
+          .selectExpr("id % 1 as key2", "id as value2")
+
+      val join = df1.join(df2, col("key1") === col("key2")).select(col("key1"), col("value2"))
+
+      // Before Execution, there is one SortMergeJoin
+      val SmjBeforeExecution = join.queryExecution.executedPlan.collect {
+        case smj: SortMergeJoinExec => smj
+      }
+      assert(SmjBeforeExecution.length === 1)
+
+      // Check the answer.
+      val expectedAnswer =
+        spark
+          .range(0, 1000)
+          .selectExpr("0 as key", "id as value")
+          .union(spark.range(0, 1000).selectExpr("0 as key", "id as value"))
+      checkAnswer(
+        join,
+        expectedAnswer.collect())
+
+      // During execution, the SMJ is changed to Union of SMJ + BHJ
+      val SmjAfterExecution = join.queryExecution.executedPlan.collect {
+        case smj: SortMergeJoinExec => smj
+      }
+      assert(SmjAfterExecution.length === 1)
+
+      val numBhjAfterExecution = join.queryExecution.executedPlan.collect {
+        case smj: BroadcastHashJoinExec => smj
+      }.length
+      assert(numBhjAfterExecution === 1)
+
+      val queryStageInputs = join.queryExecution.executedPlan.collect {
+        case q: QueryStageInput => q
+      }
+      assert(queryStageInputs.length === 4)
     }
   }
 }

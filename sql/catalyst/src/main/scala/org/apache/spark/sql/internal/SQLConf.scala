@@ -211,6 +211,18 @@ object SQLConf {
     .booleanConf
     .createWithDefault(false)
 
+  val ADAPTIVE_EXECUTION_JOIN_ENABLED = buildConf("spark.sql.adaptive.join.enabled")
+    .doc("When true and adaptive execution is enabled, a better join strategy is determined at" +
+      "runtime.")
+    .booleanConf
+    .createWithDefault(true)
+
+  val ADAPTIVE_EXECUTION_SKEWED_JOIN_ENABLED = buildConf("spark.sql.adaptive.skewedJoin.enabled")
+    .doc("When true and adaptive execution is enabled, a skewed join is automatically handled at" +
+      "runtime.")
+    .booleanConf
+    .createWithDefault(true)
+
   val SHUFFLE_MIN_NUM_POSTSHUFFLE_PARTITIONS =
     buildConf("spark.sql.adaptive.minNumPostShufflePartitions")
       .internal()
@@ -986,6 +998,10 @@ class SQLConf extends Serializable with Logging {
     getConf(SHUFFLE_TARGET_POSTSHUFFLE_INPUT_SIZE)
 
   def adaptiveExecutionEnabled: Boolean = getConf(ADAPTIVE_EXECUTION_ENABLED)
+
+  def adaptiveJoinEnabled: Boolean = getConf(ADAPTIVE_EXECUTION_JOIN_ENABLED)
+
+  def adaptiveSkewedJoinEnabled: Boolean = getConf(ADAPTIVE_EXECUTION_SKEWED_JOIN_ENABLED)
 
   def minNumPostShufflePartitions: Int =
     getConf(SHUFFLE_MIN_NUM_POSTSHUFFLE_PARTITIONS)

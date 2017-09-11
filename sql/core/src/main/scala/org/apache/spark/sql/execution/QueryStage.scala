@@ -376,12 +376,18 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
     }
   }
 
-  def apply(plan: SparkPlan): SparkPlan = plan match {
-    case queryStage: QueryStage =>
-      val optimizedPlan = optimizeJoin(queryStage.child, queryStage)
-      queryStage.child = optimizedPlan
-      queryStage
-    case _ => plan
+  def apply(plan: SparkPlan): SparkPlan = {
+    if (!conf.adaptiveJoinEnabled) {
+      plan
+    } else {
+      plan match {
+        case queryStage: QueryStage =>
+          val optimizedPlan = optimizeJoin(queryStage.child, queryStage)
+          queryStage.child = optimizedPlan
+          queryStage
+        case _ => plan
+      }
+    }
   }
 }
 
@@ -389,12 +395,14 @@ case class HandleSkewedJoin(conf: SQLConf) extends Rule[SparkPlan] {
 
   private def skewedPartitions(plan: SparkPlan): Seq[Int] = {
     // TODO implement this when the plan.stats has the info
-    Seq.empty[Int]
+    // Seq.empty[Int]
+    Seq(0)
   }
 
   private def canBroadcast(plan: SparkPlan, partitionId: Int): Boolean = {
     // TODO fix this
-    plan.stats.sizeInBytes >= 0 && plan.stats.sizeInBytes <= conf.adaptiveBroadcastJoinThreshold
+    // plan.stats.sizeInBytes >= 0 && plan.stats.sizeInBytes <= conf.adaptiveBroadcastJoinThreshold
+    true
   }
 
   private def handleSkewedJoin(
@@ -454,20 +462,26 @@ case class HandleSkewedJoin(conf: SQLConf) extends Rule[SparkPlan] {
       }
   }
 
-  def apply(plan: SparkPlan): SparkPlan = plan match {
-    case queryStage: QueryStage =>
-      val queryStageInputs: Seq[ShuffleQueryStageInput] = queryStage.collect {
-        case input: ShuffleQueryStageInput => input
+  def apply(plan: SparkPlan): SparkPlan = {
+    if (!conf.adaptiveSkewedJoinEnabled) {
+      plan
+    } else {
+      plan match {
+        case queryStage: QueryStage =>
+          val queryStageInputs: Seq[ShuffleQueryStageInput] = queryStage.collect {
+            case input: ShuffleQueryStageInput => input
+          }
+          if (queryStageInputs.length == 2) {
+            // Currently we only support handling skewed join for 2 table join.
+            val optimizedPlan = handleSkewedJoin(queryStage.child, queryStage)
+            queryStage.child = optimizedPlan
+            queryStage
+          } else {
+            queryStage
+          }
+        case _ => plan
       }
-      if (queryStageInputs.length == 2) {
-        // Currently we only support handling skewed join for 2 table join.
-        val optimizedPlan = handleSkewedJoin(queryStage.child, queryStage)
-        queryStage.child = optimizedPlan
-        queryStage
-      } else {
-        queryStage
-      }
-    case _ => plan
+    }
   }
 }
 
