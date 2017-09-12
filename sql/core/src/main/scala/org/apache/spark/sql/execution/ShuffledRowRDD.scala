@@ -31,7 +31,9 @@ import org.apache.spark.sql.catalyst.InternalRow
 private final class ShuffledRowRDDPartition(
     val postShufflePartitionIndex: Int,
     val startPreShufflePartitionIndex: Int,
-    val endPreShufflePartitionIndex: Int) extends Partition {
+    val endPreShufflePartitionIndex: Int,
+    val startMapId: Option[Int] = None,
+    val endMapId: Option[Int] = None) extends Partition {
   override val index: Int = postShufflePartitionIndex
 }
 
