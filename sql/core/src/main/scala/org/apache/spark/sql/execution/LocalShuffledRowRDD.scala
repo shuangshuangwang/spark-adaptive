@@ -70,7 +70,7 @@ class LocalShuffledRowRDD(
         numPreShufflePartitions,
         context,
         mapId,
-        mapId)
+        mapId + 1)
     reader.read().asInstanceOf[Iterator[Product2[Int, InternalRow]]].map(_._2)
   }
 
