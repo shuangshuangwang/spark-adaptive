@@ -287,6 +287,7 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
   test("adaptive skewed join") {
     val spark = defaultSparkSession
     spark.conf.set(SQLConf.ADAPTIVE_EXECUTION_JOIN_ENABLED.key, "false")
+    spark.conf.set(SQLConf.ADAPTIVE_EXECUTION_SKEWED_PARTITION_ROW_COUNT_THRESHOLD.key, 10)
     withSparkSession(spark) { spark: SparkSession =>
       val df1 =
         spark
@@ -327,9 +328,11 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
       assert(numBhjAfterExecution === 1)
 
       val queryStageInputs = join.queryExecution.executedPlan.collect {
-        case q: QueryStageInput => q
+        case q: ShuffleQueryStageInput if q.skewedPartitions.isDefined => q
       }
-      assert(queryStageInputs.length === 4)
+      assert(queryStageInputs.length === 2)
+      assert(queryStageInputs(0).skewedPartitions === queryStageInputs(1).skewedPartitions)
+      assert(queryStageInputs(0).skewedPartitions === Some(Set(0)))
     }
   }
 }

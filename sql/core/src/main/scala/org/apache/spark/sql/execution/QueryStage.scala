@@ -393,16 +393,52 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
 
 case class HandleSkewedJoin(conf: SQLConf) extends Rule[SparkPlan] {
 
-  private def skewedPartitions(plan: SparkPlan): Seq[Int] = {
-    // TODO implement this when the plan.stats has the info
-    // Seq.empty[Int]
-    Seq(0)
+  private def isSizeSkewed(size: Long, medianSize: Long): Boolean = {
+    size > medianSize * conf.adaptiveSkewedFactor &&
+      size > conf.adaptiveSkewedSizeThreshold
+  }
+
+  private def isRowCountSkewed(rowCount: Long, medianRowCount: Long): Boolean = {
+    rowCount > medianRowCount * conf.adaptiveSkewedFactor &&
+      rowCount > conf.adaptiveSkewedRowCountThreshold
+  }
+
+  /**
+   * A partition is considered as a skewed partition if its size is larger than the median
+   * partition size * spark.sql.adaptive.skewedPartitionFactor and also larger than
+   * spark.sql.adaptive.skewedPartitionSizeThreshold, or if its row count is larger than
+   * the median row count * spark.sql.adaptive.skewedPartitionFactor and also larger than
+   * spark.sql.adaptive.skewedPartitionSizeThreshold.
+   */
+  private def skewedPartitions(plan: QueryStage): Seq[Int] = {
+    plan.stats.partStatistics match {
+      case Some(partitionStats) =>
+        val bytesByPartitionId = partitionStats.bytesByPartitionId
+        val rowsByPartitionId = partitionStats.rowsByPartitionId
+        val sortedBytesByPartitionId = bytesByPartitionId.sorted
+        val sortedRowsByPartitionId = rowsByPartitionId.sorted
+        val medianPartitionSize = sortedBytesByPartitionId(bytesByPartitionId.length / 2)
+        val medianRowCount = sortedRowsByPartitionId(rowsByPartitionId.length / 2)
+
+        val skewedPartitions = new ArrayBuffer[Int]()
+        for (i <- 0 until bytesByPartitionId.length) {
+          if (isSizeSkewed(bytesByPartitionId(i), medianPartitionSize) ||
+            isRowCountSkewed(rowsByPartitionId(i), medianRowCount)) {
+            skewedPartitions += i
+          }
+        }
+        skewedPartitions.toArray
+      case None => Seq.empty[Int]
+    }
   }
 
   private def canBroadcast(plan: SparkPlan, partitionId: Int): Boolean = {
-    // TODO fix this
-    // plan.stats.sizeInBytes >= 0 && plan.stats.sizeInBytes <= conf.adaptiveBroadcastJoinThreshold
-    true
+    plan.stats.partStatistics match {
+      case Some(partitionStats) =>
+        partitionStats.bytesByPartitionId(partitionId) >= 0 &&
+        partitionStats.bytesByPartitionId(partitionId) <= conf.adaptiveBroadcastJoinThreshold
+      case None => false
+    }
   }
 
   private def handleSkewedJoin(
@@ -411,8 +447,8 @@ case class HandleSkewedJoin(conf: SQLConf) extends Rule[SparkPlan] {
     case smj @ SortMergeJoinExec(leftKeys, rightKeys, joinType, condition,
       SortExec(_, _, left: ShuffleQueryStageInput, _),
       SortExec(_, _, right: ShuffleQueryStageInput, _)) =>
-      val skewedPartitionsInLeft = skewedPartitions(left)
-      val skewedPartitionsInRight = skewedPartitions(right)
+      val skewedPartitionsInLeft = skewedPartitions(left.childStage)
+      val skewedPartitionsInRight = skewedPartitions(right.childStage)
       val handledPartitions = mutable.HashSet[Int]()
       val subJoins = mutable.ArrayBuffer[SparkPlan](smj)
       skewedPartitionsInLeft.foreach { p =>
