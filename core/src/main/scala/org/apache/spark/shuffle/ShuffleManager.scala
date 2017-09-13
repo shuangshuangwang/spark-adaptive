@@ -59,6 +59,16 @@ private[spark] trait ShuffleManager {
       startPartition: Int,
       endPartition: Int,
       context: TaskContext,
+      mapId: Int): ShuffleReader[K, C]
+
+  /**
+   * Get a reader for reduce partitions (startMapId to endMapId-1, inclusive) to read each map
+   * output's single partition. Called on executors by reduce tasks.
+   */
+  def getReader[K, C](
+      handle: ShuffleHandle,
+      partition: Int,
+      context: TaskContext,
       startMapId: Int,
       endMapId: Int): ShuffleReader[K, C]
 

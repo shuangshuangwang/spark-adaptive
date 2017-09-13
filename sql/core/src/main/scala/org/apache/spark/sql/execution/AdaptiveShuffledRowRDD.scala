@@ -51,7 +51,6 @@ class AdaptiveShuffledRowRDD(
     SparkEnv.get.shuffleManager.getReader(
       dependency.shuffleHandle,
       partitionIndex,
-      partitionIndex + 1,
       context,
       shuffledRowPartition.startMapId.get,
       shuffledRowPartition.endMapId.get)
