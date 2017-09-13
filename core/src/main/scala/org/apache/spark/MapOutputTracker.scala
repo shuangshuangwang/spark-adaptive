@@ -304,9 +304,8 @@ private[spark] abstract class MapOutputTracker(conf: SparkConf) extends Logging 
     *         and the second item is a sequence of (shuffle block id, shuffle block size) tuples
     *         describing the shuffle blocks that are stored at that block manager.
     */
-  def getMapSizesByExecutorId(
-      shuffleId: Int, startPartition: Int, endPartition: Int, startMapId: Int, endMapId: Int)
-          : Seq[(BlockManagerId, Seq[(BlockId, Long)])]
+  def getMapSizesByExecutorId(shuffleId: Int, startPartition: Int, endPartition: Int,
+      startMapId: Int, endMapId: Int): Seq[(BlockManagerId, Seq[(BlockId, Long)])]
 
   /**
    * Deletes map output status information for the specified shuffle stage.
@@ -931,10 +930,10 @@ private[spark] object MapOutputTracker extends Logging {
       statuses: Array[MapStatus],
       startMapId: Int,
       endMapId: Int): Seq[(BlockManagerId, Seq[(BlockId, Long)])] = {
-    assert (statuses != null && statuses.length > endMapId)
+    assert (statuses != null && statuses.length >= endMapId && startMapId >= 0)
     val splitsByAddress = new HashMap[BlockManagerId, ArrayBuffer[(BlockId, Long)]]
-    val statusesPicked = statuses.drop(startMapId).dropRight(statuses.length - endMapId + 1)
-    for ((status, mapId) <- statusesPicked.zipWithIndex) {
+    for (mapId <- startMapId until endMapId) {
+      val status = statuses(mapId)
       if (status == null) {
         val errorMessage = s"Missing an output location for shuffle $shuffleId"
         logError(errorMessage)
