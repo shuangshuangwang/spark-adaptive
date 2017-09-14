@@ -528,32 +528,6 @@ private[spark] class MapOutputTrackerMaster(
   }
 
   /**
-   * Return the location where the Map ran. The location includes both a host and an executor id on
-   * that host.
-   *
-   * @param dep shuffle dependency object
-   * @param mapId the map Id
-   * @return a sequence of a single location that includes both a host and an executor id on that
-   *         host.
-   */
-  def getMapLocation(dep: ShuffleDependency[_, _, _], mapId: Int) : Seq[String] = {
-    val shuffleStatus = shuffleStatuses.get(dep.shuffleId).orNull
-    if (shuffleStatus != null) {
-      shuffleStatus.withMapStatuses { statuses =>
-        if (mapId < statuses.length && statuses(mapId) != null) {
-          val status = statuses(mapId)
-          Seq(
-            ExecutorCacheTaskLocation(status.location.host, status.location.executorId).toString)
-        } else {
-          Nil
-        }
-      }
-    } else {
-      Nil
-    }
-  }
-
-  /**
    * Return a list of locations that each have fraction of map output greater than the specified
    * threshold.
    *
@@ -604,6 +578,36 @@ private[spark] class MapOutputTrackerMaster(
       }
     }
     None
+  }
+
+  /**
+   * Return the locations where the Mapper(s) ran. The locations each includes both a host and an
+   * executor id on that host.
+   *
+   * @param dep shuffle dependency object
+   * @param startMapId the start map id
+   * @param endMapId the end map id
+   * @return a sequence of locations that each includes both a host and an executor id on that
+   * host.
+   */
+  def getMapLocation(dep: ShuffleDependency[_, _, _], startMapId: Int, endMapId: Int): Seq[String] =
+  {
+    val shuffleStatus = shuffleStatuses.get(dep.shuffleId).orNull
+    if (shuffleStatus != null) {
+      shuffleStatus.withMapStatuses { statuses =>
+        if (startMapId >= 0 && endMapId <= statuses.length) {
+          val statusesPicked = statuses.drop(startMapId).dropRight(statuses.length - endMapId)
+            .filter(_ != null)
+          statusesPicked.map(
+            status => ExecutorCacheTaskLocation(
+              status.location.host, status.location.executorId).toString)
+        } else {
+          Nil
+        }
+      }
+    } else {
+      Nil
+    }
   }
 
   def incrementEpoch() {

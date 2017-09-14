@@ -22,6 +22,19 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 
 /**
+ * The [[Partition]] used by [[AdaptiveShuffledRowRDD]]. A post-shuffle partition
+ * (identified by `postShufflePartitionIndex`) contains a range of pre-shuffle partitions
+ * (`preShufflePartitionIndex` from `startMapId` to `endMapId - 1`, inclusive).
+ */
+private final class AdaptiveShuffledRowRDDPartition(
+    val postShufflePartitionIndex: Int,
+    val PreShufflePartitionIndex: Int,
+    val startMapId: Int,
+    val endMapId: Int) extends Partition {
+  override val index: Int = postShufflePartitionIndex
+}
+
+/**
  * This is a specialized version of [[org.apache.spark.sql.execution.ShuffledRowRDD]]. This is used
  * in Spark SQL adaptive execution to solve data skew issues. This RDD includes rearranged
  * partitions from mappers.
@@ -55,21 +68,26 @@ class AdaptiveShuffledRowRDD(
         } else {
           numPostShufflePartitions
         }
-      new ShuffledRowRDDPartition(
-        i, partitionIndex, partitionIndex + 1, Some(startIndex), Some(endIndex))
+      new AdaptiveShuffledRowRDDPartition(i, partitionIndex, startIndex, endIndex)
     }
   }
 
+  override def getPreferredLocations(partition: Partition): Seq[String] = {
+    val tracker = SparkEnv.get.mapOutputTracker.asInstanceOf[MapOutputTrackerMaster]
+    val shuffledRowRDDPartition = partition.asInstanceOf[AdaptiveShuffledRowRDDPartition]
+    val dep = dependencies.head.asInstanceOf[ShuffleDependency[_, _, _]]
+    tracker.getMapLocation(
+      dep, shuffledRowRDDPartition.startMapId, shuffledRowRDDPartition.endMapId)
+  }
+
   override def compute(split: Partition, context: TaskContext): Iterator[InternalRow] = {
-    val shuffledRowPartition = split.asInstanceOf[ShuffledRowRDDPartition]
-    assert(shuffledRowPartition.startMapId.isDefined)
-    assert(shuffledRowPartition.endMapId.isDefined)
+    val shuffledRowPartition = split.asInstanceOf[AdaptiveShuffledRowRDDPartition]
     val reader = SparkEnv.get.shuffleManager.getReader(
       dependency.shuffleHandle,
       partitionIndex,
       context,
-      shuffledRowPartition.startMapId.get,
-      shuffledRowPartition.endMapId.get)
+      shuffledRowPartition.startMapId,
+      shuffledRowPartition.endMapId)
     reader.read().asInstanceOf[Iterator[Product2[Int, InternalRow]]].map(_._2)
   }
 
