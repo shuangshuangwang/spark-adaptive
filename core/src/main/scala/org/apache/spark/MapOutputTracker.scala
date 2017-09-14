@@ -598,11 +598,10 @@ private[spark] class MapOutputTrackerMaster(
     if (shuffleStatus != null) {
       shuffleStatus.withMapStatuses { statuses =>
         if (startMapId >= 0 && endMapId <= statuses.length) {
-          val statusesPicked = statuses.drop(startMapId).dropRight(statuses.length - endMapId)
-            .filter(_ != null)
-          statusesPicked.map(
-            status => ExecutorCacheTaskLocation(
-              status.location.host, status.location.executorId).toString)
+          val statusesPicked = statuses.slice(startMapId, endMapId).filter(_ != null)
+          statusesPicked.map { status =>
+            ExecutorCacheTaskLocation(status.location.host, status.location.executorId).toString
+          }
         } else {
           Nil
         }

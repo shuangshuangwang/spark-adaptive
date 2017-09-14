@@ -137,8 +137,7 @@ private[spark] class SortShuffleManager(conf: SparkConf) extends ShuffleManager 
       endPartition,
       context,
       startMapId = Some(startMapId),
-      endMapId = Some(endMapId)
-      )
+      endMapId = Some(endMapId))
   }
 
   /** Get a writer for a given partition. Called on executors by map tasks. */
