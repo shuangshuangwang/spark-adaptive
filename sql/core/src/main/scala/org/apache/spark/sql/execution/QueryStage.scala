@@ -86,6 +86,8 @@ case class ShuffleQueryStageInput(
     childStage: QueryStage,
     override val output: Seq[Attribute],
     var isLocalShuffle: Boolean = false,
+    // TODO refine this later
+    var isAdaptiveShuffle: Boolean = false,
     var skewedPartitions: Option[mutable.HashSet[Int]] = None,
     var partitionStartIndices: Option[Array[Int]] = None,
     var partitionEndIndices: Option[Array[Int]] = None)
@@ -99,6 +101,10 @@ case class ShuffleQueryStageInput(
     val childRDD = childStage.execute().asInstanceOf[ShuffledRowRDD]
     if (isLocalShuffle) {
       new LocalShuffledRowRDD(childRDD.dependency)
+    } else if (isAdaptiveShuffle) {
+      assert(partitionStartIndices.isDefined && partitionEndIndices.isDefined &&
+        partitionEndIndices.get(0) == partitionStartIndices.get(0) + 1)
+      new AdaptiveShuffledRowRDD(childRDD.dependency, partitionStartIndices.get(0))
     } else {
       new ShuffledRowRDD(childRDD.dependency, partitionStartIndices, partitionEndIndices)
     }
@@ -158,7 +164,7 @@ abstract class QueryStage extends UnaryExecNode {
 
     // Submit shuffle stages
     val shuffleQueryStages: Seq[ShuffleQueryStage] = child.collect {
-      case ShuffleQueryStageInput(queryStage: ShuffleQueryStage, _, _, _, _, _) => queryStage
+      case ShuffleQueryStageInput(queryStage: ShuffleQueryStage, _, _, _, _, _, _) => queryStage
     }
     shuffleQueryStages.foreach { queryStage =>
       queryStageSubmitTasks += QueryStage.queryStageThreadPool.submit(
@@ -458,12 +464,14 @@ case class HandleSkewedJoin(conf: SQLConf) extends Rule[SparkPlan] {
             ShuffleQueryStageInput(
               left.childStage,
               left.output,
+              isAdaptiveShuffle = true,
               partitionStartIndices = Some(Array(p)),
               partitionEndIndices = Some(Array(p + 1)))
           val rightInput =
             ShuffleQueryStageInput(
               right.childStage,
               right.output,
+              isAdaptiveShuffle = true,
               partitionStartIndices = Some(Array(p)),
               partitionEndIndices = Some(Array(p + 1)))
           subJoins += BroadcastHashJoinExec(
