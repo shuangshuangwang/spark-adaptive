@@ -64,8 +64,7 @@ class AdaptiveShuffledRowRDD(
     val shuffledRowPartition = split.asInstanceOf[ShuffledRowRDDPartition]
     assert(shuffledRowPartition.startMapId.isDefined)
     assert(shuffledRowPartition.endMapId.isDefined)
-    val reader =
-    SparkEnv.get.shuffleManager.getReader(
+    val reader = SparkEnv.get.shuffleManager.getReader(
       dependency.shuffleHandle,
       partitionIndex,
       context,
