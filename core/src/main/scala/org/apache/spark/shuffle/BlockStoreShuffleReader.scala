@@ -55,6 +55,8 @@ private[spark] class BlockStoreShuffleReader[K, C](
         handle.shuffleId,
         startPartition,
         endPartition)
+      case (_, _) => throw new IllegalArgumentException(
+        "startMapId and endMapId should be both set or unset")
     }
 
     val wrappedStreams = new ShuffleBlockFetcherIterator(
