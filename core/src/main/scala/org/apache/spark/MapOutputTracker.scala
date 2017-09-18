@@ -904,7 +904,7 @@ private[spark] object MapOutputTracker extends Logging {
         logError(errorMessage)
         throw new MetadataFetchFailedException(shuffleId, startPartition, errorMessage)
       } else {
-        var n = 0L
+        var n = 0
         var totalSize = 0L
         for (part <- startPartition until endPartition) {
           n += 1
@@ -952,7 +952,7 @@ private[spark] object MapOutputTracker extends Logging {
         logError(errorMessage)
         throw new MetadataFetchFailedException(shuffleId, startPartition, errorMessage)
       } else {
-        var n = 0L
+        var n = 0
         var totalSize = 0L
         for (part <- startPartition until endPartition) {
           n += 1
