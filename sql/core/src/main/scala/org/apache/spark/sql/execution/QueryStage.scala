@@ -22,8 +22,7 @@ import java.util.concurrent.Future
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
-import org.apache.spark.MapOutputStatistics
-import org.apache.spark.broadcast
+import org.apache.spark.{broadcast, MapOutputStatistics}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeMap, Expression, SortOrder}
@@ -100,7 +99,7 @@ case class ShuffleQueryStageInput(
   override def doExecute(): RDD[InternalRow] = {
     val childRDD = childStage.execute().asInstanceOf[ShuffledRowRDD]
     if (isLocalShuffle) {
-      new LocalShuffledRowRDD(childRDD.dependency)
+      new LocalShuffledRowRDD(childRDD.dependency, partitionStartIndices, partitionEndIndices)
     } else if (isAdaptiveShuffle) {
       assert(partitionStartIndices.isDefined && partitionEndIndices.isDefined &&
         partitionEndIndices.get(0) == partitionStartIndices.get(0) + 1)
@@ -324,6 +323,51 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
     }
   }
 
+  private[execution] def calculatePartitionStartEndIndices(rowStatisticsByPartitionId: Array[Long]):
+    (Array[Int], Array[Int]) = {
+    val partitionStartIndicies = ArrayBuffer[Int]()
+    val partitionEndIndicies = ArrayBuffer[Int]()
+    var continuousZeroFlag = false
+    var i = 0
+    for (rows <- rowStatisticsByPartitionId) {
+      if (rows != 0 && !continuousZeroFlag) {
+        partitionStartIndicies += i
+        continuousZeroFlag = true
+      } else if (rows == 0 && continuousZeroFlag) {
+        partitionEndIndicies += i
+        continuousZeroFlag = false
+      }
+      i += 1
+    }
+    if (continuousZeroFlag) {
+      partitionEndIndicies += i
+    }
+    if (partitionStartIndicies.length == 0) {
+      (Array(0), Array(0))
+    } else {
+      (partitionStartIndicies.toArray, partitionEndIndicies.toArray)
+    }
+  }
+
+  // After transforming to BroadcastJoin from SortMergeJoin, local shuffle read should be used and
+  // there's opportunity to read less partitions based on previous shuffle write results
+  private def optimizeForLocalShuffleReadLessPartitions(
+    broadcastSidePlan: SparkPlan, childrenPlans: Seq[SparkPlan]) = {
+    broadcastSidePlan match {
+      case broadcast: ShuffleQueryStageInput =>
+        val (startIndicies, endIndicies) = calculatePartitionStartEndIndices(broadcast.childStage
+          .stats.partStatistics.get.rowsByPartitionId)
+        childrenPlans.foreach {
+          case input: ShuffleQueryStageInput =>
+            input.isLocalShuffle = true
+            input.partitionStartIndices = Some(startIndicies)
+            input.partitionEndIndices = Some(endIndicies)
+          case _ =>
+        }
+      case _ =>
+    }
+  }
+
   private def optimizeSortMergeJoin(
       smj: SortMergeJoinExec,
       queryStage: QueryStage): SparkPlan = {
@@ -353,11 +397,14 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
 
         if ((numExchanges == 0) ||
           (queryStage.isInstanceOf[ShuffleQueryStage] && numExchanges <= 1)) {
-          // Set QueryStageInput to return local shuffled RDD
-          broadcastJoin.children.foreach {
-            case input: ShuffleQueryStageInput => input.isLocalShuffle = true
-            case _ =>
+          val broadcastSidePlan = buildSide match {
+            case BuildLeft => (removeSort(left))
+            case BuildRight => (removeSort(right))
           }
+
+          // Local shuffle read less partitions based on broadcastSide's row statistics
+          optimizeForLocalShuffleReadLessPartitions(broadcastSidePlan, broadcastJoin.children)
+
           // Update the plan in queryStage
           queryStage.child = newChild
           broadcastJoin

@@ -335,4 +335,36 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
       assert(queryStageInputs(0).skewedPartitions === Some(Set(0)))
     }
   }
+
+  test("Calculate local shuffle read partition ranges") {
+    val testArrays = Array(
+      Array(0L, 0, 1, 2, 0, 1, 2, 0),
+      Array(1L, 1, 0),
+      Array(0L, 1, 0),
+      Array(0L, 0),
+      Array(1L, 2, 3)
+    )
+    val anserStart = Array(
+      Array(2, 5),
+      Array(0),
+      Array(1),
+      Array(0),
+      Array(0)
+    )
+    val anserEnd = Array(
+      Array(4, 7),
+      Array(2),
+      Array(2),
+      Array(0),
+      Array(3)
+    )
+    val func = OptimizeJoin(new SQLConf).calculatePartitionStartEndIndices _
+    testArrays.zip(anserStart).zip(anserEnd).foreach {
+      case ((parameter, expectStart), expectEnd) =>
+        val (resultStart, resultEnd) = func(parameter)
+        assert(resultStart.deep == expectStart.deep)
+        assert(resultEnd.deep == expectEnd.deep)
+      case _ =>
+    }
+  }
 }

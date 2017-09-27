@@ -28,7 +28,7 @@ import org.apache.spark.sql.catalyst.InternalRow
  */
 private final class AdaptiveShuffledRowRDDPartition(
     val postShufflePartitionIndex: Int,
-    val PreShufflePartitionIndex: Int,
+    val preShufflePartitionIndex: Int,
     val startMapId: Int,
     val endMapId: Int) extends Partition {
   override val index: Int = postShufflePartitionIndex
@@ -82,10 +82,11 @@ class AdaptiveShuffledRowRDD(
 
   override def compute(split: Partition, context: TaskContext): Iterator[InternalRow] = {
     val shuffledRowPartition = split.asInstanceOf[AdaptiveShuffledRowRDDPartition]
+    val index = shuffledRowPartition.preShufflePartitionIndex
     val reader = SparkEnv.get.shuffleManager.getReader(
       dependency.shuffleHandle,
-      partitionIndex,
-      partitionIndex + 1,
+      index,
+      index + 1,
       context,
       shuffledRowPartition.startMapId,
       shuffledRowPartition.endMapId)
