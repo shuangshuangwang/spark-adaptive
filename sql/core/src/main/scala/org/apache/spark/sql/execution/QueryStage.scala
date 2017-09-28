@@ -338,8 +338,8 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
     }
   }
 
-  private[execution] def calculatePartitionStartEndIndices(rowStatisticsByPartitionId: Array[Long]):
-    (Array[Int], Array[Int]) = {
+  private[execution] def calculatePartitionStartEndIndices(
+      rowStatisticsByPartitionId: Array[Long]): (Array[Int], Array[Int]) = {
     val partitionStartIndicies = ArrayBuffer[Int]()
     val partitionEndIndicies = ArrayBuffer[Int]()
     var continuousZeroFlag = false
@@ -365,16 +365,24 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
   }
 
   // After transforming to BroadcastJoin from SortMergeJoin, local shuffle read should be used and
-  // there's opportunity to read less partitions based on previous shuffle write results
+  // there's opportunity to read less partitions based on previous shuffle write results.
   private def optimizeForLocalShuffleReadLessPartitions(
-    broadcastSidePlan: SparkPlan, childrenPlans: Seq[SparkPlan]) = {
+      broadcastSidePlan: SparkPlan,
+      childrenPlans: Seq[SparkPlan]) = {
+    // All shuffle read should be local instead of remote
+    childrenPlans.foreach {
+      case input: ShuffleQueryStageInput =>
+        input.isLocalShuffle = true
+      case _ =>
+    }
+    // If there's shuffle write on broadcast side, then find the partitions with 0 rows and ignore
+    // reading them in local shuffle read.
     broadcastSidePlan match {
       case broadcast: ShuffleQueryStageInput =>
         val (startIndicies, endIndicies) = calculatePartitionStartEndIndices(broadcast.childStage
           .stats.partStatistics.get.rowsByPartitionId)
         childrenPlans.foreach {
           case input: ShuffleQueryStageInput =>
-            input.isLocalShuffle = true
             input.partitionStartIndices = Some(startIndicies)
             input.partitionEndIndices = Some(endIndicies)
           case _ =>
