@@ -904,10 +904,9 @@ private[spark] object MapOutputTracker extends Logging {
         logError(errorMessage)
         throw new MetadataFetchFailedException(shuffleId, startPartition, errorMessage)
       } else {
-        var n = 0
+        val n = endPartition - startPartition
         var totalSize = 0L
         for (part <- startPartition until endPartition) {
-          n += 1
           totalSize += status.getSizeForBlock(part)
         }
         splitsByAddress.getOrElseUpdate(status.location, ArrayBuffer()) +=
@@ -952,10 +951,9 @@ private[spark] object MapOutputTracker extends Logging {
         logError(errorMessage)
         throw new MetadataFetchFailedException(shuffleId, startPartition, errorMessage)
       } else {
-        var n = 0
+        val n = endPartition - startPartition
         var totalSize = 0L
         for (part <- startPartition until endPartition) {
-          n += 1
           totalSize += status.getSizeForBlock(part)
         }
         splitsByAddress.getOrElseUpdate(status.location, ArrayBuffer()) +=

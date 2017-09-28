@@ -221,7 +221,7 @@ object SQLConf {
     .doc("When true and adaptive execution is enabled, a skewed join is automatically handled at " +
       "runtime.")
     .booleanConf
-    .createWithDefault(true)
+    .createWithDefault(false)
 
   val ADAPTIVE_EXECUTION_SKEWED_PARTITION_FACTOR =
     buildConf("spark.sql.adaptive.skewedPartitionFactor")
@@ -231,7 +231,7 @@ object SQLConf {
       "factor multiple the median row count and also larger than " +
       "spark.sql.adaptive.skewedPartitionSizeThreshold.")
     .intConf
-    .createWithDefault(3)
+    .createWithDefault(10)
 
   val ADAPTIVE_EXECUTION_SKEWED_PARTITION_SIZE_THRESHOLD =
     buildConf("spark.sql.adaptive.skewedPartitionSizeThreshold")

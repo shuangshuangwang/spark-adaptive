@@ -85,10 +85,10 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
       val join = df1.join(df2, col("key1") === col("key2")).select(col("key1"), col("value2"))
 
       // Before Execution, there is one SortMergeJoin
-      val SmjBeforeExecution = join.queryExecution.executedPlan.collect {
+      val smjBeforeExecution = join.queryExecution.executedPlan.collect {
         case smj: SortMergeJoinExec => smj
       }
-      assert(SmjBeforeExecution.length === 1)
+      assert(smjBeforeExecution.length === 1)
 
       // Check the answer.
       val expectedAnswer =
@@ -101,10 +101,10 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
         expectedAnswer.collect())
 
       // During execution, the SortMergeJoin is changed to BroadcastHashJoinExec
-      val SmjAfterExecution = join.queryExecution.executedPlan.collect {
+      val smjAfterExecution = join.queryExecution.executedPlan.collect {
         case smj: SortMergeJoinExec => smj
       }
-      assert(SmjAfterExecution.length === 0)
+      assert(smjAfterExecution.length === 0)
 
       val numBhjAfterExecution = join.queryExecution.executedPlan.collect {
         case smj: BroadcastHashJoinExec => smj
@@ -151,10 +151,10 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
         .select(col("key3"), col("value1"))
 
       // Before Execution, there is two SortMergeJoins
-      val SmjBeforeExecution = join.queryExecution.executedPlan.collect {
+      val smjBeforeExecution = join.queryExecution.executedPlan.collect {
         case smj: SortMergeJoinExec => smj
       }
-      assert(SmjBeforeExecution.length === 2)
+      assert(smjBeforeExecution.length === 2)
 
       // Check the answer.
       val expectedAnswer =
@@ -167,10 +167,10 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
         expectedAnswer.collect())
 
       // During execution, 2 SortMergeJoin are changed to BroadcastHashJoin
-      val SmjAfterExecution = join.queryExecution.executedPlan.collect {
+      val smjAfterExecution = join.queryExecution.executedPlan.collect {
         case smj: SortMergeJoinExec => smj
       }
-      assert(SmjAfterExecution.length === 0)
+      assert(smjAfterExecution.length === 0)
 
       val numBhjAfterExecution = join.queryExecution.executedPlan.collect {
         case smj: BroadcastHashJoinExec => smj
@@ -217,10 +217,10 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
         .select(col("key3"), col("value1"))
 
       // Before Execution, there is two SortMergeJoins
-      val SmjBeforeExecution = join.queryExecution.executedPlan.collect {
+      val smjBeforeExecution = join.queryExecution.executedPlan.collect {
         case smj: SortMergeJoinExec => smj
       }
-      assert(SmjBeforeExecution.length === 2)
+      assert(smjBeforeExecution.length === 2)
 
       // Check the answer.
       val partResult =
@@ -234,10 +234,10 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
         expectedAnswer.collect())
 
       // During execution, no SortMergeJoin is changed to BroadcastHashJoin
-      val SmjAfterExecution = join.queryExecution.executedPlan.collect {
+      val smjAfterExecution = join.queryExecution.executedPlan.collect {
         case smj: SortMergeJoinExec => smj
       }
-      assert(SmjAfterExecution.length === 2)
+      assert(smjAfterExecution.length === 2)
 
       val numBhjAfterExecution = join.queryExecution.executedPlan.collect {
         case smj: BroadcastHashJoinExec => smj
@@ -257,18 +257,18 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
       val join = df.join(df, "id")
 
       // Before Execution, there is one SortMergeJoin
-      val SmjBeforeExecution = join.queryExecution.executedPlan.collect {
+      val smjBeforeExecution = join.queryExecution.executedPlan.collect {
         case smj: SortMergeJoinExec => smj
       }
-      assert(SmjBeforeExecution.length === 1)
+      assert(smjBeforeExecution.length === 1)
 
       checkAnswer(join, df.collect())
 
       // During execution, the SortMergeJoin is changed to BroadcastHashJoinExec
-      val SmjAfterExecution = join.queryExecution.executedPlan.collect {
+      val smjAfterExecution = join.queryExecution.executedPlan.collect {
         case smj: SortMergeJoinExec => smj
       }
-      assert(SmjAfterExecution.length === 0)
+      assert(smjAfterExecution.length === 0)
 
       val numBhjAfterExecution = join.queryExecution.executedPlan.collect {
         case smj: BroadcastHashJoinExec => smj
@@ -287,6 +287,7 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
   test("adaptive skewed join") {
     val spark = defaultSparkSession
     spark.conf.set(SQLConf.ADAPTIVE_EXECUTION_JOIN_ENABLED.key, "false")
+    spark.conf.set(SQLConf.ADAPTIVE_EXECUTION_SKEWED_JOIN_ENABLED.key, "true")
     spark.conf.set(SQLConf.ADAPTIVE_EXECUTION_SKEWED_PARTITION_ROW_COUNT_THRESHOLD.key, 10)
     withSparkSession(spark) { spark: SparkSession =>
       val df1 =
@@ -301,10 +302,10 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
       val join = df1.join(df2, col("key1") === col("key2")).select(col("key1"), col("value2"))
 
       // Before Execution, there is one SortMergeJoin
-      val SmjBeforeExecution = join.queryExecution.executedPlan.collect {
+      val smjBeforeExecution = join.queryExecution.executedPlan.collect {
         case smj: SortMergeJoinExec => smj
       }
-      assert(SmjBeforeExecution.length === 1)
+      assert(smjBeforeExecution.length === 1)
 
       // Check the answer.
       val expectedAnswer =
@@ -316,19 +317,14 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
         join,
         expectedAnswer.collect())
 
-      // During execution, the SMJ is changed to Union of SMJ + BHJ
-      val SmjAfterExecution = join.queryExecution.executedPlan.collect {
+      // During execution, the SMJ is changed to Union of SMJ + 5 SMJ of the skewed partition.
+      val smjAfterExecution = join.queryExecution.executedPlan.collect {
         case smj: SortMergeJoinExec => smj
       }
-      assert(SmjAfterExecution.length === 1)
-
-      val numBhjAfterExecution = join.queryExecution.executedPlan.collect {
-        case smj: BroadcastHashJoinExec => smj
-      }.length
-      assert(numBhjAfterExecution === 1)
+      assert(smjAfterExecution.length === 6)
 
       val queryStageInputs = join.queryExecution.executedPlan.collect {
-        case q: ShuffleQueryStageInput if q.skewedPartitions.isDefined => q
+        case q: ShuffleQueryStageInput => q
       }
       assert(queryStageInputs.length === 2)
       assert(queryStageInputs(0).skewedPartitions === queryStageInputs(1).skewedPartitions)

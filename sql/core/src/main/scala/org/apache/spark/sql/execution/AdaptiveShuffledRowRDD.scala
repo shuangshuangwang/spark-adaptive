@@ -47,7 +47,8 @@ private final class AdaptiveShuffledRowRDDPartition(
 class AdaptiveShuffledRowRDD(
     var dependency: ShuffleDependency[Int, InternalRow, InternalRow],
     partitionIndex: Int,
-    specifiedMapIdStartIndices: Option[Array[Int]] = None)
+    specifiedMapIdStartIndices: Option[Array[Int]] = None,
+    specifiedMapIdEndIndices: Option[Array[Int]] = None)
   extends RDD[InternalRow](dependency.rdd.context, Nil) {
 
   private[this] val numPostShufflePartitions = dependency.rdd.partitions.length
@@ -62,12 +63,15 @@ class AdaptiveShuffledRowRDD(
   override def getPartitions: Array[Partition] = {
     Array.tabulate[Partition](mapIdStartIndices.length) { i =>
       val startIndex = mapIdStartIndices(i)
-      val endIndex =
-        if (i < mapIdStartIndices.length - 1) {
-          mapIdStartIndices(i + 1)
-        } else {
-          numPostShufflePartitions
-        }
+      val endIndex = specifiedMapIdEndIndices match {
+        case Some(indices) => indices(i)
+        case None =>
+          if (i < mapIdStartIndices.length - 1) {
+            mapIdStartIndices(i + 1)
+          } else {
+            numPostShufflePartitions
+          }
+      }
       new AdaptiveShuffledRowRDDPartition(i, partitionIndex, startIndex, endIndex)
     }
   }
