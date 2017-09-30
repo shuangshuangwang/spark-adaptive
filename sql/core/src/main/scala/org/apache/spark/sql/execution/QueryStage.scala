@@ -220,7 +220,7 @@ abstract class QueryStage extends UnaryExecNode {
 
     // 2. Determine reducer number
     val queryStageInputs: Seq[ShuffleQueryStageInput] = child.collect {
-      case input: ShuffleQueryStageInput => input
+      case input: ShuffleQueryStageInput if !input.isLocalShuffle => input
     }
     val childMapOutputStatistics = queryStageInputs.map(_.childStage.mapOutputStatistics)
       .filter(_ != null).toArray

@@ -338,12 +338,14 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
       Array(1L, 1, 0),
       Array(0L, 1, 0),
       Array(0L, 0),
-      Array(1L, 2, 3)
+      Array(1L, 2, 3),
+      Array[Long]()
     )
     val anserStart = Array(
       Array(2, 5),
       Array(0),
       Array(1),
+      Array(0),
       Array(0),
       Array(0)
     )
@@ -352,7 +354,8 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
       Array(2),
       Array(2),
       Array(0),
-      Array(3)
+      Array(3),
+      Array(0)
     )
     val func = OptimizeJoin(new SQLConf).calculatePartitionStartEndIndices _
     testArrays.zip(anserStart).zip(anserEnd).foreach {

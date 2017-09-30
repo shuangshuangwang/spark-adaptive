@@ -211,7 +211,7 @@ class ExchangeCoordinator(
     val partitionStartIndices = ArrayBuffer[Int]()
     val partitionEndIndices = ArrayBuffer[Int]()
 
-    def nextStartIndice(i: Int): Int = {
+    def nextStartIndex(i: Int): Int = {
       var index = i
       while (index < numPreShufflePartitions && omittedPartitions.contains(index)) {
         index = index + 1
@@ -229,27 +229,27 @@ class ExchangeCoordinator(
       size
     }
 
-    val firstStartIndice = nextStartIndice(0)
-    partitionStartIndices += firstStartIndice
-    var postShuffleInputSize = shufflePartitionSize(firstStartIndice)
+    val firstStartIndex = nextStartIndex(0)
+    partitionStartIndices += firstStartIndex
+    var postShuffleInputSize = shufflePartitionSize(firstStartIndex)
 
-    var i = firstStartIndice
-    var nextIndice = nextStartIndice(i + 1)
-    while (nextIndice < numPreShufflePartitions) {
-      val nextShuffleInputSize = shufflePartitionSize(nextIndice)
+    var i = firstStartIndex
+    var nextIndex = nextStartIndex(i + 1)
+    while (nextIndex < numPreShufflePartitions) {
+      val nextShuffleInputSize = shufflePartitionSize(nextIndex)
       // If the next partition is omitted, or including the nextShuffleInputSize would exceed the
       // target partition size, then start a new partition.
-      if (nextIndice != i + 1 ||
+      if (nextIndex != i + 1 ||
         postShuffleInputSize +  nextShuffleInputSize > targetPostShuffleInputSize) {
         partitionEndIndices += i + 1
-        partitionStartIndices += nextIndice
+        partitionStartIndices += nextIndex
         postShuffleInputSize = nextShuffleInputSize
-        i = nextIndice
+        i = nextIndex
       } else {
         postShuffleInputSize += nextShuffleInputSize
         i += 1
       }
-      nextIndice = nextStartIndice(nextIndice + 1)
+      nextIndex = nextStartIndex(nextIndex + 1)
     }
     partitionEndIndices += i + 1
 
