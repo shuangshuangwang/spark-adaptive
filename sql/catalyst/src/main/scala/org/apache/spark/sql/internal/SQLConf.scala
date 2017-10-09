@@ -247,6 +247,12 @@ object SQLConf {
     .longConf
     .createWithDefault(10L * 1000 * 1000)
 
+  val ADAPTIVE_EXECUTION_TARGET_POSTSHUFFLE_ROW_COUNT =
+    buildConf("spark.sql.adaptive.shuffle.targetPostShuffleRowCount")
+    .doc("The target post-shuffle row count of a task.")
+    .longConf
+    .createWithDefault(20L * 1000 * 1000)
+
   val SHUFFLE_MIN_NUM_POSTSHUFFLE_PARTITIONS =
     buildConf("spark.sql.adaptive.minNumPostShufflePartitions")
       .internal()
@@ -1034,6 +1040,9 @@ class SQLConf extends Serializable with Logging {
 
   def adaptiveSkewedRowCountThreshold : Long =
     getConf(ADAPTIVE_EXECUTION_SKEWED_PARTITION_ROW_COUNT_THRESHOLD)
+
+  def adaptiveTargetPostShuffleRowCount: Long =
+    getConf(ADAPTIVE_EXECUTION_TARGET_POSTSHUFFLE_ROW_COUNT)
 
   def minNumPostShufflePartitions: Int =
     getConf(SHUFFLE_MIN_NUM_POSTSHUFFLE_PARTITIONS)

@@ -225,11 +225,13 @@ abstract class QueryStage extends UnaryExecNode {
     val childMapOutputStatistics = queryStageInputs.map(_.childStage.mapOutputStatistics)
       .filter(_ != null).toArray
     if (childMapOutputStatistics.length > 0) {
+
       val minNumPostShufflePartitions =
         if (conf.minNumPostShufflePartitions > 0) Some(conf.minNumPostShufflePartitions) else None
 
       val exchangeCoordinator = new ExchangeCoordinator(
         conf.targetPostShuffleInputSize,
+        conf.adaptiveTargetPostShuffleRowCount,
         minNumPostShufflePartitions)
 
       if (queryStageInputs.length == 2 && queryStageInputs.forall(_.skewedPartitions.isDefined)) {
@@ -424,38 +426,44 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
         } else {
           None
         }
-      broadcastSide.map { buildSide =>
-        val broadcastJoin = BroadcastHashJoinExec(
-          leftKeys, rightKeys, joinType, buildSide, condition, removeSort(left), removeSort(right))
+        broadcastSide.map { buildSide =>
+          val broadcastJoin = BroadcastHashJoinExec(
+            leftKeys,
+            rightKeys,
+            joinType,
+            buildSide,
+            condition,
+            removeSort(left),
+            removeSort(right))
 
-        val newChild = queryStage.child.transformDown {
-          case s: SortMergeJoinExec if (s.fastEquals(smj)) => broadcastJoin
-        }
-        // Apply EnsureRequirement rule to check if any new Exchange will be added. If no
-        // Exchange is added, we convert the sortMergeJoin to BroadcastHashJoin. Otherwise
-        // we don't convert it because it causes additional Shuffle.
-        val afterEnsureRequirements = EnsureRequirements(conf).apply(newChild)
-        val numExchanges = afterEnsureRequirements.collect {
-          case e: ShuffleExchange => e
-        }.length
-
-        if ((numExchanges == 0) ||
-          (queryStage.isInstanceOf[ShuffleQueryStage] && numExchanges <= 1)) {
-          val broadcastSidePlan = buildSide match {
-            case BuildLeft => (removeSort(left))
-            case BuildRight => (removeSort(right))
+          val newChild = queryStage.child.transformDown {
+            case s: SortMergeJoinExec if (s.fastEquals(smj)) => broadcastJoin
           }
+          // Apply EnsureRequirement rule to check if any new Exchange will be added. If no
+          // Exchange is added, we convert the sortMergeJoin to BroadcastHashJoin. Otherwise
+          // we don't convert it because it causes additional Shuffle.
+          val afterEnsureRequirements = EnsureRequirements(conf).apply(newChild)
+          val numExchanges = afterEnsureRequirements.collect {
+            case e: ShuffleExchange => e
+          }.length
 
-          // Local shuffle read less partitions based on broadcastSide's row statistics
-          optimizeForLocalShuffleReadLessPartitions(broadcastSidePlan, broadcastJoin.children)
+          if ((numExchanges == 0) ||
+            (queryStage.isInstanceOf[ShuffleQueryStage] && numExchanges <= 1)) {
+            val broadcastSidePlan = buildSide match {
+              case BuildLeft => (removeSort(left))
+              case BuildRight => (removeSort(right))
+            }
 
-          // Update the plan in queryStage
-          queryStage.child = newChild
-          broadcastJoin
-        } else {
-          smj
-        }
-      }.getOrElse(smj)
+            // Local shuffle read less partitions based on broadcastSide's row statistics
+            optimizeForLocalShuffleReadLessPartitions(broadcastSidePlan, broadcastJoin.children)
+
+            // Update the plan in queryStage
+            queryStage.child = newChild
+            broadcastJoin
+          } else {
+            smj
+          }
+        }.getOrElse(smj)
     }
   }
 

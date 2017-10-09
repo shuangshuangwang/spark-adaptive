@@ -49,11 +49,13 @@ class ExchangeCoordinatorSuite extends SparkFunSuite with BeforeAndAfterAll {
   private def checkEstimation(
       coordinator: ExchangeCoordinator,
       bytesByPartitionIdArray: Array[Array[Long]],
+      rowCountByPartitionIdArray: Array[Array[Long]],
       expectedPartitionStartIndices: Array[Int]): Unit = {
-    val mapOutputStatistics = bytesByPartitionIdArray.zipWithIndex.map {
-      case (bytesByPartitionId, index) =>
-        new MapOutputStatistics(index, bytesByPartitionId)
-    }
+    val mapOutputStatistics = bytesByPartitionIdArray.zip(rowCountByPartitionIdArray).zipWithIndex
+      .map {
+        case ((bytesByPartitionId, rowCountByPartitionId), index) =>
+          new MapOutputStatistics(index, bytesByPartitionId, rowCountByPartitionId)
+     }
     val estimatedPartitionStartIndices =
       coordinator.estimatePartitionStartIndices(mapOutputStatistics)
     assert(estimatedPartitionStartIndices === expectedPartitionStartIndices)
@@ -62,13 +64,15 @@ class ExchangeCoordinatorSuite extends SparkFunSuite with BeforeAndAfterAll {
   private def checkStartEndEstimation(
       coordinator: ExchangeCoordinator,
       bytesByPartitionIdArray: Array[Array[Long]],
+      rowCountByPartitionIdArray: Array[Array[Long]],
       omittedPartitions: mutable.HashSet[Int],
       expectedPartitionStartIndices: Array[Int],
       expectedPartitionEndIndices: Array[Int]): Unit = {
-    val mapOutputStatistics = bytesByPartitionIdArray.zipWithIndex.map {
-      case (bytesByPartitionId, index) =>
-        new MapOutputStatistics(index, bytesByPartitionId)
-    }
+    val mapOutputStatistics = bytesByPartitionIdArray.zip(rowCountByPartitionIdArray).zipWithIndex
+      .map {
+        case ((bytesByPartitionId, rowCountByPartitionId), index) =>
+          new MapOutputStatistics(index, bytesByPartitionId, rowCountByPartitionId)
+      }
     val (estimatedPartitionStartIndices, estimatedPartitionEndIndices) =
       coordinator.estimatePartitionStartEndIndices(mapOutputStatistics, omittedPartitions)
     assert(estimatedPartitionStartIndices === expectedPartitionStartIndices)
@@ -76,13 +80,18 @@ class ExchangeCoordinatorSuite extends SparkFunSuite with BeforeAndAfterAll {
   }
 
   test("test estimatePartitionStartIndices - 1 Exchange") {
-    val coordinator = new ExchangeCoordinator(100L)
+    val coordinator = new ExchangeCoordinator(100L, 100L)
+
+    val smallRowCountByPartitionIdArray = Array(Array(1L, 1, 1, 1, 1))
 
     {
       // All bytes per partition are 0.
       val bytesByPartitionId = Array[Long](0, 0, 0, 0, 0)
       val expectedPartitionStartIndices = Array[Int](0)
-      checkEstimation(coordinator, Array(bytesByPartitionId), expectedPartitionStartIndices)
+      checkEstimation(coordinator,
+        Array(bytesByPartitionId),
+        smallRowCountByPartitionIdArray,
+        expectedPartitionStartIndices)
     }
 
     {
@@ -90,40 +99,75 @@ class ExchangeCoordinatorSuite extends SparkFunSuite with BeforeAndAfterAll {
       // 1 post-shuffle partition is needed.
       val bytesByPartitionId = Array[Long](10, 0, 20, 0, 0)
       val expectedPartitionStartIndices = Array[Int](0)
-      checkEstimation(coordinator, Array(bytesByPartitionId), expectedPartitionStartIndices)
+      checkEstimation(coordinator,
+        Array(bytesByPartitionId),
+        smallRowCountByPartitionIdArray,
+        expectedPartitionStartIndices)
     }
 
     {
       // 2 post-shuffle partitions are needed.
       val bytesByPartitionId = Array[Long](10, 0, 90, 20, 0)
       val expectedPartitionStartIndices = Array[Int](0, 3)
-      checkEstimation(coordinator, Array(bytesByPartitionId), expectedPartitionStartIndices)
+      checkEstimation(coordinator,
+        Array(bytesByPartitionId),
+        smallRowCountByPartitionIdArray,
+        expectedPartitionStartIndices)
     }
 
     {
       // There are a few large pre-shuffle partitions.
       val bytesByPartitionId = Array[Long](110, 10, 100, 110, 0)
       val expectedPartitionStartIndices = Array[Int](0, 1, 2, 3, 4)
-      checkEstimation(coordinator, Array(bytesByPartitionId), expectedPartitionStartIndices)
+      checkEstimation(coordinator,
+        Array(bytesByPartitionId),
+        smallRowCountByPartitionIdArray,
+        expectedPartitionStartIndices)
     }
 
     {
       // All pre-shuffle partitions are larger than the targeted size.
       val bytesByPartitionId = Array[Long](100, 110, 100, 110, 110)
       val expectedPartitionStartIndices = Array[Int](0, 1, 2, 3, 4)
-      checkEstimation(coordinator, Array(bytesByPartitionId), expectedPartitionStartIndices)
+      checkEstimation(coordinator,
+        Array(bytesByPartitionId),
+        smallRowCountByPartitionIdArray,
+        expectedPartitionStartIndices)
     }
 
     {
       // The last pre-shuffle partition is in a single post-shuffle partition.
       val bytesByPartitionId = Array[Long](30, 30, 0, 40, 110)
       val expectedPartitionStartIndices = Array[Int](0, 4)
-      checkEstimation(coordinator, Array(bytesByPartitionId), expectedPartitionStartIndices)
+      checkEstimation(coordinator,
+        Array(bytesByPartitionId),
+        smallRowCountByPartitionIdArray,
+        expectedPartitionStartIndices)
+    }
+  }
+
+  test("test estimatePartitionStartIndices and let row count exceed the threshold") {
+    val coordinator = new ExchangeCoordinator(100L, 100L)
+
+    val largeRowCountByPartitionIdArray = Array(Array(120L, 20, 90, 1, 20))
+
+    {
+      // Total bytes is less than the target size, but the sum of row count will exceed the
+      // threshold.
+      // 3 post-shuffle partition is needed.
+      val bytesByPartitionId = Array[Long](1, 1, 1, 1, 1)
+      val expectedPartitionStartIndices = Array[Int](0, 1, 2, 4)
+      checkEstimation(coordinator,
+        Array(bytesByPartitionId),
+        largeRowCountByPartitionIdArray,
+        expectedPartitionStartIndices)
     }
   }
 
   test("test estimatePartitionStartIndices - 2 Exchanges") {
-    val coordinator = new ExchangeCoordinator(100L)
+    val coordinator = new ExchangeCoordinator(100L, 100L)
+
+    val smallRowCountByPartitionIdArray = Array(Array(1L, 1, 1, 1, 1), Array(1L, 1, 1, 1, 1))
 
     {
       // If there are multiple values of the number of pre-shuffle partitions,
@@ -145,6 +189,7 @@ class ExchangeCoordinatorSuite extends SparkFunSuite with BeforeAndAfterAll {
       checkEstimation(
         coordinator,
         Array(bytesByPartitionId1, bytesByPartitionId2),
+        smallRowCountByPartitionIdArray,
         expectedPartitionStartIndices)
     }
 
@@ -157,6 +202,7 @@ class ExchangeCoordinatorSuite extends SparkFunSuite with BeforeAndAfterAll {
       checkEstimation(
         coordinator,
         Array(bytesByPartitionId1, bytesByPartitionId2),
+        smallRowCountByPartitionIdArray,
         expectedPartitionStartIndices)
     }
 
@@ -168,6 +214,7 @@ class ExchangeCoordinatorSuite extends SparkFunSuite with BeforeAndAfterAll {
       checkEstimation(
         coordinator,
         Array(bytesByPartitionId1, bytesByPartitionId2),
+        smallRowCountByPartitionIdArray,
         expectedPartitionStartIndices)
     }
 
@@ -179,6 +226,7 @@ class ExchangeCoordinatorSuite extends SparkFunSuite with BeforeAndAfterAll {
       checkEstimation(
         coordinator,
         Array(bytesByPartitionId1, bytesByPartitionId2),
+        smallRowCountByPartitionIdArray,
         expectedPartitionStartIndices)
     }
 
@@ -190,6 +238,7 @@ class ExchangeCoordinatorSuite extends SparkFunSuite with BeforeAndAfterAll {
       checkEstimation(
         coordinator,
         Array(bytesByPartitionId1, bytesByPartitionId2),
+        smallRowCountByPartitionIdArray,
         expectedPartitionStartIndices)
     }
 
@@ -201,6 +250,7 @@ class ExchangeCoordinatorSuite extends SparkFunSuite with BeforeAndAfterAll {
       checkEstimation(
         coordinator,
         Array(bytesByPartitionId1, bytesByPartitionId2),
+        smallRowCountByPartitionIdArray,
         expectedPartitionStartIndices)
     }
 
@@ -212,12 +262,15 @@ class ExchangeCoordinatorSuite extends SparkFunSuite with BeforeAndAfterAll {
       checkEstimation(
         coordinator,
         Array(bytesByPartitionId1, bytesByPartitionId2),
+        smallRowCountByPartitionIdArray,
         expectedPartitionStartIndices)
     }
   }
 
   test("test estimatePartitionStartIndices and enforce minimal number of reducers") {
-    val coordinator = new ExchangeCoordinator(100L, Some(2))
+    val coordinator = new ExchangeCoordinator(100L, 100L, Some(2))
+
+    val smallRowCountByPartitionIdArray = Array(Array(1L, 1, 1, 1, 1), Array(1L, 1, 1, 1, 1))
 
     {
       // The minimal number of post-shuffle partitions is not enforced because
@@ -228,6 +281,7 @@ class ExchangeCoordinatorSuite extends SparkFunSuite with BeforeAndAfterAll {
       checkEstimation(
         coordinator,
         Array(bytesByPartitionId1, bytesByPartitionId2),
+        smallRowCountByPartitionIdArray,
         expectedPartitionStartIndices)
     }
 
@@ -239,6 +293,7 @@ class ExchangeCoordinatorSuite extends SparkFunSuite with BeforeAndAfterAll {
       checkEstimation(
         coordinator,
         Array(bytesByPartitionId1, bytesByPartitionId2),
+        smallRowCountByPartitionIdArray,
         expectedPartitionStartIndices)
     }
 
@@ -250,12 +305,15 @@ class ExchangeCoordinatorSuite extends SparkFunSuite with BeforeAndAfterAll {
       checkEstimation(
         coordinator,
         Array(bytesByPartitionId1, bytesByPartitionId2),
+        smallRowCountByPartitionIdArray,
         expectedPartitionStartIndices)
     }
   }
 
   test("test estimatePartitionStartEndIndices") {
-    val coordinator = new ExchangeCoordinator(100L)
+    val coordinator = new ExchangeCoordinator(100L, 100L)
+
+    val smallRowCountByPartitionIdArray = Array(Array(1L, 1, 1, 1, 1), Array(1L, 1, 1, 1, 1))
 
     {
       // All bytes per partition are 0.
@@ -267,6 +325,7 @@ class ExchangeCoordinatorSuite extends SparkFunSuite with BeforeAndAfterAll {
       checkStartEndEstimation(
         coordinator,
         Array(bytesByPartitionId1, bytesByPartitionId2),
+        smallRowCountByPartitionIdArray,
         omittedPartitions,
         expectedPartitionStartIndices,
         expectedPartitionEndIndices)
@@ -282,6 +341,7 @@ class ExchangeCoordinatorSuite extends SparkFunSuite with BeforeAndAfterAll {
       checkStartEndEstimation(
         coordinator,
         Array(bytesByPartitionId1, bytesByPartitionId2),
+        smallRowCountByPartitionIdArray,
         omittedPartitions,
         expectedPartitionStartIndices,
         expectedPartitionEndIndices)
@@ -297,6 +357,7 @@ class ExchangeCoordinatorSuite extends SparkFunSuite with BeforeAndAfterAll {
       checkStartEndEstimation(
         coordinator,
         Array(bytesByPartitionId1, bytesByPartitionId2),
+        smallRowCountByPartitionIdArray,
         omittedPartitions,
         expectedPartitionStartIndices,
         expectedPartitionEndIndices)
@@ -312,6 +373,7 @@ class ExchangeCoordinatorSuite extends SparkFunSuite with BeforeAndAfterAll {
       checkStartEndEstimation(
         coordinator,
         Array(bytesByPartitionId1, bytesByPartitionId2),
+        smallRowCountByPartitionIdArray,
         omittedPartitions,
         expectedPartitionStartIndices,
         expectedPartitionEndIndices)
@@ -327,6 +389,7 @@ class ExchangeCoordinatorSuite extends SparkFunSuite with BeforeAndAfterAll {
       checkStartEndEstimation(
         coordinator,
         Array(bytesByPartitionId1, bytesByPartitionId2),
+        smallRowCountByPartitionIdArray,
         omittedPartitions,
         expectedPartitionStartIndices,
         expectedPartitionEndIndices)
