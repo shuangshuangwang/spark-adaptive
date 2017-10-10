@@ -15,11 +15,10 @@
  * limitations under the License.
  */
 
-package org.apache.spark.sql.execution
+package org.apache.spark.sql.execution.adaptive
 
 import org.apache.spark._
 import org.apache.spark.rdd.{RDD, ShuffledRDDPartition}
-import org.apache.spark.shuffle.ShuffleReader
 import org.apache.spark.sql.catalyst.InternalRow
 
 /**

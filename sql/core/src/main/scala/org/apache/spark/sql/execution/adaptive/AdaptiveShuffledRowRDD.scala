@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.sql.execution
+package org.apache.spark.sql.execution.adaptive
 
 import org.apache.spark._
 import org.apache.spark.rdd.RDD

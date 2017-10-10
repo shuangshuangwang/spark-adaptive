@@ -23,6 +23,7 @@ import org.scalatest.BeforeAndAfterAll
 
 import org.apache.spark.{MapOutputStatistics, SparkConf, SparkFunSuite}
 import org.apache.spark.sql._
+import org.apache.spark.sql.execution.adaptive.ShuffleQueryStageInput
 import org.apache.spark.sql.execution.exchange.{ExchangeCoordinator, ShuffleExchange}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.internal.SQLConf
