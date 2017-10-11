@@ -50,7 +50,7 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
     }
   }
 
-  private[execution] def calculatePartitionStartEndIndices(
+  private[adaptive] def calculatePartitionStartEndIndices(
       rowStatisticsByPartitionId: Array[Long]): (Array[Int], Array[Int]) = {
     val partitionStartIndices = ArrayBuffer[Int]()
     val partitionEndIndices = ArrayBuffer[Int]()
