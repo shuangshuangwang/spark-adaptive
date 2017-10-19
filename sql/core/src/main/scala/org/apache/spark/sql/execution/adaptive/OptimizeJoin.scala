@@ -90,15 +90,16 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
     // If there's shuffle write on broadcast side, then find the partitions with 0 rows and ignore
     // reading them in local shuffle read.
     broadcastSidePlan match {
-      case broadcast: ShuffleQueryStageInput =>
-        val (startIndicies, endIndicies) = calculatePartitionStartEndIndices(broadcast.childStage
-          .stats.partStatistics.get.rowsByPartitionId)
-        childrenPlans.foreach {
-          case input: ShuffleQueryStageInput =>
-            input.partitionStartIndices = Some(startIndicies)
-            input.partitionEndIndices = Some(endIndicies)
-          case _ =>
-        }
+      case broadcast: ShuffleQueryStageInput
+        if broadcast.childStage.stats.partStatistics.isDefined =>
+          val (startIndicies, endIndicies) = calculatePartitionStartEndIndices(broadcast.childStage
+            .stats.partStatistics.get.rowsByPartitionId)
+          childrenPlans.foreach {
+            case input: ShuffleQueryStageInput =>
+              input.partitionStartIndices = Some(startIndicies)
+              input.partitionEndIndices = Some(endIndicies)
+            case _ =>
+          }
       case _ =>
     }
   }
