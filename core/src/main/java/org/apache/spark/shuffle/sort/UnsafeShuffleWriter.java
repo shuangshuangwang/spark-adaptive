@@ -248,7 +248,7 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
         logger.error("Error while deleting temp file {}", tmp.getAbsolutePath());
       }
     }
-    mapStatus = MapStatus$.MODULE$.apply(blockManager.shuffleServerId(), mapInfo.lengths, mapInfo.rows);
+    mapStatus = MapStatus$.MODULE$.apply(blockManager.shuffleServerId(), mapInfo.lengths, mapInfo.records);
   }
 
   @VisibleForTesting
@@ -296,7 +296,7 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
         // Here, we don't need to perform any metrics updates because the bytes written to this
         // output file would have already been counted as shuffle bytes written.
         Files.move(spills[0].file, outputFile);
-        return new MapInfo(spills[0].partitionLengths, spills[0].partitionRows);
+        return new MapInfo(spills[0].partitionLengths, spills[0].partitionRecords);
       } else {
         final MapInfo mapInfo;
         // There are multiple spills to merge, so none of these spill files' lengths were counted
@@ -364,7 +364,7 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
     assert (spills.length >= 2);
     final int numPartitions = partitioner.numPartitions();
     final long[] partitionLengths = new long[numPartitions];
-    final long[] partitionRows = new long[numPartitions];
+    final long[] partitionRecords = new long[numPartitions];
     final InputStream[] spillInputStreams = new InputStream[spills.length];
 
     final OutputStream bos = new BufferedOutputStream(
@@ -392,7 +392,7 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
         if (compressionCodec != null) {
           partitionOutput = compressionCodec.compressedOutputStream(partitionOutput);
         }
-        int rows = 0;
+        long records = 0;
         for (int i = 0; i < spills.length; i++) {
           final long partitionLengthInSpill = spills[i].partitionLengths[partition];
           if (partitionLengthInSpill > 0) {
@@ -409,12 +409,12 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
               partitionInputStream.close();
             }
           }
-          rows += spills[i].partitionRows[partition];
+          records += spills[i].partitionRecords[partition];
         }
         partitionOutput.flush();
         partitionOutput.close();
         partitionLengths[partition] = (mergedFileOutputStream.getByteCount() - initialFileLength);
-        partitionRows[partition] = rows;
+        partitionRecords[partition] = records;
       }
       threwException = false;
     } finally {
@@ -425,7 +425,7 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
       }
       Closeables.close(mergedFileOutputStream, threwException);
     }
-    return new MapInfo(partitionLengths, partitionRows);
+    return new MapInfo(partitionLengths, partitionRecords);
   }
 
   /**
@@ -439,7 +439,7 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
     assert (spills.length >= 2);
     final int numPartitions = partitioner.numPartitions();
     final long[] partitionLengths = new long[numPartitions];
-    final long[] partitionRows = new long[numPartitions];
+    final long[] partitionRecords = new long[numPartitions];
     final FileChannel[] spillInputChannels = new FileChannel[spills.length];
     final long[] spillInputChannelPositions = new long[spills.length];
     FileChannel mergedFileOutputChannel = null;
@@ -457,6 +457,7 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
       for (int partition = 0; partition < numPartitions; partition++) {
         for (int i = 0; i < spills.length; i++) {
           final long partitionLengthInSpill = spills[i].partitionLengths[partition];
+          final long partitionRecordInSpill = spills[i].partitionRecords[partition];
           final FileChannel spillInputChannel = spillInputChannels[i];
           final long writeStartTime = System.nanoTime();
           Utils.copyFileStreamNIO(
@@ -468,7 +469,7 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
           writeMetrics.incWriteTime(System.nanoTime() - writeStartTime);
           bytesWrittenToMergedFile += partitionLengthInSpill;
           partitionLengths[partition] += partitionLengthInSpill;
-          partitionRows[partition] += spills[i].partitionRows[partition];
+          partitionRecords[partition] += partitionRecordInSpill;
         }
       }
       // Check the position after transferTo loop to see if it is in the right position and raise an
@@ -494,7 +495,7 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
       }
       Closeables.close(mergedFileOutputChannel, threwException);
     }
-    return new MapInfo(partitionLengths, partitionRows);
+    return new MapInfo(partitionLengths, partitionRecords);
   }
 
   @Override

@@ -17,12 +17,12 @@
 
 package org.apache.spark.shuffle.sort;
 
-public class MapInfo {
-    public long[] lengths;
-    public long[] rows;
+public final class MapInfo {
+    final long[] lengths;
+    final long[] records;
 
-    public MapInfo(long[] lengths, long[] rows) {
+    public MapInfo(long[] lengths, long[] records) {
         this.lengths = lengths;
-        this.rows = rows;
+        this.records = records;
     }
 }

@@ -494,14 +494,23 @@ private[spark] class MapOutputTrackerMaster(
   def getStatistics(dep: ShuffleDependency[_, _, _]): MapOutputStatistics = {
     shuffleStatuses(dep.shuffleId).withMapStatuses { statuses =>
       val totalSizes = new Array[Long](dep.partitioner.numPartitions)
-      val totalRows = new Array[Long](dep.partitioner.numPartitions)
       for (s <- statuses) {
         for (i <- 0 until totalSizes.length) {
           totalSizes(i) += s.getSizeForBlock(i)
-          totalRows(i) += s.getRowForBlock(i)
         }
       }
-      new MapOutputStatistics(dep.shuffleId, totalSizes, totalRows)
+      var totalRecords = new Array[Long](0)
+      val records = statuses(0).getRecordForBlock(0)
+      // records == -1 means no records number info
+      if (records != -1) {
+        totalRecords = new Array[Long](dep.partitioner.numPartitions)
+        for (s <- statuses) {
+          for (i <- totalRecords.indices) {
+            totalRecords(i) += s.getRecordForBlock(i)
+          }
+        }
+      }
+      new MapOutputStatistics(dep.shuffleId, totalSizes, totalRecords)
     }
   }
 

@@ -97,7 +97,7 @@ private[spark] class DiskBlockObjectWriter(
    * output bytes written since the latter is expensive to do for each record.
    */
   private var numRecordsWritten = 0
-  def getNumRecordsWritten: Int = numRecordsWritten
+  private var committedRecords = 0
 
   private def initialize(): Unit = {
     fos = new FileOutputStream(file, true)
@@ -181,14 +181,16 @@ private[spark] class DiskBlockObjectWriter(
       }
 
       val pos = channel.position()
-      val fileSegment = new FileSegment(file, committedPosition, pos - committedPosition)
+      val fileSegment = new FileSegment(file, committedPosition,
+        pos - committedPosition, numRecordsWritten - committedRecords)
       committedPosition = pos
+      committedRecords = numRecordsWritten
       // In certain compression codecs, more bytes are written after streams are closed
       writeMetrics.incBytesWritten(committedPosition - reportedPosition)
       reportedPosition = committedPosition
       fileSegment
     } else {
-      new FileSegment(file, committedPosition, 0)
+      new FileSegment(file, committedPosition, 0, 0)
     }
   }
 

@@ -90,8 +90,6 @@ final class BypassMergeSortShuffleWriter<K, V> extends ShuffleWriter<K, V> {
   private FileSegment[] partitionWriterSegments;
   @Nullable private MapStatus mapStatus;
   private long[] partitionLengths;
-  private long[] partitionRows;
-
 
   /**
    * Are we in the process of stopping? Because map tasks can call stop() with success = true
@@ -126,12 +124,10 @@ final class BypassMergeSortShuffleWriter<K, V> extends ShuffleWriter<K, V> {
     assert (partitionWriters == null);
     if (!records.hasNext()) {
       partitionLengths = new long[numPartitions];
-      partitionRows = new long[numPartitions];
       shuffleBlockResolver.writeIndexFileAndCommit(shuffleId, mapId, partitionLengths, null);
-      mapStatus = MapStatus$.MODULE$.apply(blockManager.shuffleServerId(), partitionLengths, partitionRows);
+      mapStatus = MapStatus$.MODULE$.apply(blockManager.shuffleServerId(), partitionLengths, new long[numPartitions]);
       return;
     }
-    partitionRows =  new long[numPartitions];
     final SerializerInstance serInstance = serializer.newInstance();
     final long openStartTime = System.nanoTime();
     partitionWriters = new DiskBlockObjectWriter[numPartitions];
@@ -158,22 +154,23 @@ final class BypassMergeSortShuffleWriter<K, V> extends ShuffleWriter<K, V> {
     for (int i = 0; i < numPartitions; i++) {
       final DiskBlockObjectWriter writer = partitionWriters[i];
       partitionWriterSegments[i] = writer.commitAndGet();
-      partitionRows[i] = writer.getNumRecordsWritten();
       writer.close();
     }
 
     File output = shuffleBlockResolver.getDataFile(shuffleId, mapId);
     File tmp = Utils.tempFileWith(output);
+    MapInfo mapInfo;
     try {
-      partitionLengths = writePartitionedFile(tmp);
+      mapInfo = writePartitionedFile(tmp);
+      partitionLengths = mapInfo.lengths;
       shuffleBlockResolver.writeIndexFileAndCommit(shuffleId, mapId, partitionLengths, tmp);
     } finally {
       if (tmp.exists() && !tmp.delete()) {
         logger.error("Error while deleting temp file {}", tmp.getAbsolutePath());
       }
     }
-    mapStatus = MapStatus$.MODULE$.apply(blockManager.shuffleServerId(),
-        partitionLengths, partitionRows);
+    mapStatus = MapStatus$.MODULE$.apply(
+      blockManager.shuffleServerId(), mapInfo.lengths, mapInfo.records);
   }
 
   @VisibleForTesting
@@ -186,12 +183,13 @@ final class BypassMergeSortShuffleWriter<K, V> extends ShuffleWriter<K, V> {
    *
    * @return array of lengths, in bytes, of each partition of the file (used by map output tracker).
    */
-  private long[] writePartitionedFile(File outputFile) throws IOException {
+  private MapInfo writePartitionedFile(File outputFile) throws IOException {
     // Track location of the partition starts in the output file
     final long[] lengths = new long[numPartitions];
+    final long[] records = new long[numPartitions];
     if (partitionWriters == null) {
       // We were passed an empty iterator
-      return lengths;
+      return new MapInfo(lengths, records);
     }
 
     final FileOutputStream out = new FileOutputStream(outputFile, true);
@@ -200,6 +198,7 @@ final class BypassMergeSortShuffleWriter<K, V> extends ShuffleWriter<K, V> {
     try {
       for (int i = 0; i < numPartitions; i++) {
         final File file = partitionWriterSegments[i].file();
+        records[i] = partitionWriterSegments[i].record();
         if (file.exists()) {
           final FileInputStream in = new FileInputStream(file);
           boolean copyThrewException = true;
@@ -220,7 +219,7 @@ final class BypassMergeSortShuffleWriter<K, V> extends ShuffleWriter<K, V> {
       writeMetrics.incWriteTime(System.nanoTime() - writeStartTime);
     }
     partitionWriters = null;
-    return lengths;
+    return new MapInfo(lengths, records);
   }
 
   @Override

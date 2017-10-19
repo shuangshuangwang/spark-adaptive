@@ -75,11 +75,15 @@ object SizeInBytesOnlyStatsPlanVisitor extends SparkPlanVisitor[Statistics] {
     if (p.mapOutputStatistics != null) {
       val sizeInBytes = p.mapOutputStatistics.bytesByPartitionId.sum
       val bytesByPartitionId = p.mapOutputStatistics.bytesByPartitionId
-      val rowCount = p.mapOutputStatistics.rowsByPartitionId.sum
-      val rowsByPartitionId = p.mapOutputStatistics.rowsByPartitionId
-      Statistics(sizeInBytes = sizeInBytes,
-        rowCount = Some(rowCount),
-        partStatistics = Some(PartitionStatistics(bytesByPartitionId, rowsByPartitionId)))
+      if (p.mapOutputStatistics.recordsByPartitionId.nonEmpty) {
+        val rowCount = p.mapOutputStatistics.recordsByPartitionId.sum
+        val rowsByPartitionId = p.mapOutputStatistics.recordsByPartitionId
+        Statistics(sizeInBytes = sizeInBytes,
+          rowCount = Some(rowCount),
+          partStatistics = Some(PartitionStatistics(bytesByPartitionId, rowsByPartitionId)))
+      } else {
+        Statistics(sizeInBytes = sizeInBytes)
+      }
     } else {
       visitUnaryExecNode(p)
     }
@@ -108,11 +112,15 @@ object SizeInBytesOnlyStatsPlanVisitor extends SparkPlanVisitor[Statistics] {
     if (p.mapOutputStatistics != null) {
       val sizeInBytes = p.mapOutputStatistics.bytesByPartitionId.sum
       val bytesByPartitionId = p.mapOutputStatistics.bytesByPartitionId
-      val rowCount = p.mapOutputStatistics.rowsByPartitionId.sum
-      val rowsByPartitionId = p.mapOutputStatistics.rowsByPartitionId
-      Statistics(sizeInBytes = sizeInBytes,
-        rowCount = Some(rowCount),
-        partStatistics = Some(PartitionStatistics(bytesByPartitionId, rowsByPartitionId)))
+      if (p.mapOutputStatistics.recordsByPartitionId.nonEmpty) {
+        val rowCount = p.mapOutputStatistics.recordsByPartitionId.sum
+        val rowsByPartitionId = p.mapOutputStatistics.recordsByPartitionId
+        Statistics(sizeInBytes = sizeInBytes,
+          rowCount = Some(rowCount),
+          partStatistics = Some(PartitionStatistics(bytesByPartitionId, rowsByPartitionId)))
+      } else {
+        Statistics(sizeInBytes = sizeInBytes)
+      }
     } else {
       p.child.stats
     }

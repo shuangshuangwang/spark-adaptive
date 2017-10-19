@@ -27,5 +27,5 @@ package org.apache.spark
 private[spark] class MapOutputStatistics(
     val shuffleId: Int,
     val bytesByPartitionId: Array[Long],
-    val rowsByPartitionId: Array[Long] = null)
+    val recordsByPartitionId: Array[Long] = Array[Long]())
   extends Serializable
