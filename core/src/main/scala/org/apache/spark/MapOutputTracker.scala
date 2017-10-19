@@ -496,10 +496,10 @@ private[spark] class MapOutputTrackerMaster(
       val totalSizes = new Array[Long](dep.partitioner.numPartitions)
       val mapStatusSubmitTasks = ArrayBuffer[Future[_]]()
       val records = statuses(0).getRecordForBlock(0)
-      var parallelism = conf.getInt("spark.shuffle.mapOutput.dispatcher.numThreads", 8)
+      var parallelism = conf.getInt("spark.driver.cores", 1)
+      // records != -1 means there is records number info
       if (records != -1) {
         parallelism /= 2
-
       }
       val threadPool = ThreadUtils.newDaemonFixedThreadPool(parallelism, "adaptive-map-statistics")
 
@@ -518,7 +518,6 @@ private[spark] class MapOutputTrackerMaster(
       }
 
       var totalRecords = new Array[Long](0)
-      // records == -1 means no records number info
       if (records != -1) {
         totalRecords = new Array[Long](dep.partitioner.numPartitions)
         (0 until totalRecords.length).grouped(totalRecords.length / parallelism).foreach {
@@ -537,6 +536,7 @@ private[spark] class MapOutputTrackerMaster(
         }
       }
       mapStatusSubmitTasks.foreach(_.get())
+      threadPool.shutdown()
       new MapOutputStatistics(dep.shuffleId, totalSizes, totalRecords)
     }
   }
