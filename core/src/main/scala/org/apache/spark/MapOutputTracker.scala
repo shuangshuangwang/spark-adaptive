@@ -496,7 +496,7 @@ private[spark] class MapOutputTrackerMaster(
       val totalSizes = new Array[Long](dep.partitioner.numPartitions)
       val mapStatusSubmitTasks = ArrayBuffer[Future[_]]()
       val records = statuses(0).getRecordForBlock(0)
-      var parallelism = conf.getInt("spark.driver.cores", 1)
+      var parallelism = conf.getInt("spark.driver.cores", 8)
       // records != -1 means there is records number info
       if (records != -1) {
         parallelism /= 2
