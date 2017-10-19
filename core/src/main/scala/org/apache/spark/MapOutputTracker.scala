@@ -18,14 +18,13 @@
 package org.apache.spark
 
 import java.io._
-import java.util.concurrent.{ConcurrentHashMap, LinkedBlockingQueue, ThreadPoolExecutor}
+import java.util.concurrent.{ConcurrentHashMap, Future, LinkedBlockingQueue, ThreadPoolExecutor}
 import java.util.zip.{GZIPInputStream, GZIPOutputStream}
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable.{ArrayBuffer, HashMap, HashSet, Map}
 import scala.reflect.ClassTag
 import scala.util.control.NonFatal
-
 import org.apache.spark.broadcast.{Broadcast, BroadcastManager}
 import org.apache.spark.internal.Logging
 import org.apache.spark.rpc.{RpcCallContext, RpcEndpoint, RpcEndpointRef, RpcEnv}
@@ -33,6 +32,8 @@ import org.apache.spark.scheduler.{ExecutorCacheTaskLocation, MapStatus}
 import org.apache.spark.shuffle.MetadataFetchFailedException
 import org.apache.spark.storage.{BlockId, BlockManagerId, ShuffleBlockId}
 import org.apache.spark.util._
+
+import scala.collection.mutable
 
 /**
  * Helper class used by the [[MapOutputTrackerMaster]] to perform bookkeeping for a single
@@ -494,22 +495,48 @@ private[spark] class MapOutputTrackerMaster(
   def getStatistics(dep: ShuffleDependency[_, _, _]): MapOutputStatistics = {
     shuffleStatuses(dep.shuffleId).withMapStatuses { statuses =>
       val totalSizes = new Array[Long](dep.partitioner.numPartitions)
-      for (s <- statuses) {
-        for (i <- 0 until totalSizes.length) {
-          totalSizes(i) += s.getSizeForBlock(i)
-        }
-      }
-      var totalRecords = new Array[Long](0)
+
+      val mapStatusSubmitTasks = mutable.ArrayBuffer[Future[_]]()
+
       val records = statuses(0).getRecordForBlock(0)
+      var parallelism = conf.getInt("spark.shuffle.mapOutput.dispatcher.numThreads", 8)
+      if (records != -1)
+        parallelism /= 2
+
+      (0 until totalSizes.length).sliding(parallelism).foreach { reduceIds =>
+        mapStatusSubmitTasks += threadpool.submit(
+          new Runnable {
+            override def run(): Unit = {
+              for (s <- statuses) {
+                for (i <- 0 until reduceIds.length) {
+                  totalSizes(i) += s.getSizeForBlock(i)
+                }
+              }
+            }
+          }
+        )
+      }
+
+      var totalRecords = new Array[Long](0)
       // records == -1 means no records number info
       if (records != -1) {
         totalRecords = new Array[Long](dep.partitioner.numPartitions)
-        for (s <- statuses) {
-          for (i <- totalRecords.indices) {
-            totalRecords(i) += s.getRecordForBlock(i)
-          }
+        (0 until totalRecords.length).sliding(parallelism).foreach { reduceIds =>
+          mapStatusSubmitTasks += threadpool.submit(
+            new Runnable {
+              override def run(): Unit = {
+                for (s <- statuses) {
+                  for (i <- reduceIds.indices) {
+                    totalRecords(i) += s.getRecordForBlock(i)
+                  }
+                }
+              }
+            }
+          )
         }
+
       }
+      mapStatusSubmitTasks.foreach(_.get())
       new MapOutputStatistics(dep.shuffleId, totalSizes, totalRecords)
     }
   }
