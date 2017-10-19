@@ -106,6 +106,13 @@ case class HandleSkewedJoin(conf: SQLConf) extends Rule[SparkPlan] {
       val numPartitions = leftStats.bytesByPartitionId.length
       val (leftMedSize, leftMedRowCount) = medianSizeAndRowCount(leftStats)
       val (rightMedSize, rightMedRowCount) = medianSizeAndRowCount(rightStats)
+      logInfo(s"HandlingSkewedJoin left medSize/rowCounts: ($leftMedSize, $leftMedRowCount)" +
+        s" right medSize/rowCounts ($rightMedSize, $rightMedRowCount)")
+
+      logInfo(s"left bytes Max : ${leftStats.bytesByPartitionId.max}")
+      logInfo(s"left row counts Max : ${leftStats.rowsByPartitionId.max}")
+      logInfo(s"right bytes Max : ${rightStats.bytesByPartitionId.max}")
+      logInfo(s"right row counts Max : ${rightStats.rowsByPartitionId.max}")
 
       val skewedPartitions = mutable.HashSet[Int]()
       val subJoins = mutable.ArrayBuffer[SparkPlan](smj)
@@ -152,6 +159,7 @@ case class HandleSkewedJoin(conf: SQLConf) extends Rule[SparkPlan] {
           }
         }
       }
+      logInfo(s"skewed partition number is ${skewedPartitions.size}")
       if (skewedPartitions.size > 0) {
         left.skewedPartitions = Some(skewedPartitions)
         right.skewedPartitions = Some(skewedPartitions)

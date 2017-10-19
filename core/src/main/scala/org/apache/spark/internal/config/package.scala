@@ -390,4 +390,11 @@ package object config {
       .checkValue(v => v > 0 && v <= Int.MaxValue,
         s"The buffer size must be greater than 0 and less than ${Int.MaxValue}.")
       .createWithDefault(1024 * 1024)
+
+  private[spark] val SHUFFLE_HIGHLY_COMPRESSED_MAP_STATUS_THRESHOLD =
+    ConfigBuilder("spark.shuffle.highlyCompressedMapStatusThreshold")
+    .doc("HighlyCompressedMapStatus is used if shuffle partition number is larger than the " +
+      "threshold. Otherwise CompressedMapStatus is used.")
+    .intConf
+    .createWithDefault(2000)
 }
