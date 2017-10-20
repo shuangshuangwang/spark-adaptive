@@ -502,26 +502,28 @@ private[spark] class MapOutputTrackerMaster(
         parallelism /= 2
       }
       val threadPool = ThreadUtils.newDaemonFixedThreadPool(parallelism, "adaptive-map-statistics")
+      def divideRoundUp(num: Int, divisor: Int) = (num + divisor - 1) / divisor
 
-      (0 until totalSizes.length).grouped(totalSizes.length / parallelism).foreach { reduceIds =>
-        mapStatusSubmitTasks += threadPool.submit(
-          new Runnable {
-            override def run(): Unit = {
-              for (s <- statuses) {
-                for (i <- reduceIds) {
-                  totalSizes(i) += s.getSizeForBlock(i)
+      (0 until totalSizes.length).grouped(divideRoundUp(totalSizes.length, parallelism)).foreach {
+        reduceIds =>
+          mapStatusSubmitTasks += threadPool.submit(
+            new Runnable {
+              override def run(): Unit = {
+                for (s <- statuses) {
+                  for (i <- reduceIds) {
+                    totalSizes(i) += s.getSizeForBlock(i)
+                  }
                 }
               }
             }
-          }
-        )
+          )
       }
 
       var totalRecords = new Array[Long](0)
       if (records != -1) {
         totalRecords = new Array[Long](dep.partitioner.numPartitions)
-        (0 until totalRecords.length).grouped(totalRecords.length / parallelism).foreach {
-          reduceIds =>
+        (0 until totalRecords.length).grouped(divideRoundUp(totalRecords.length, parallelism))
+          .foreach { reduceIds =>
             mapStatusSubmitTasks += threadPool.submit(
               new Runnable {
                 override def run(): Unit = {
