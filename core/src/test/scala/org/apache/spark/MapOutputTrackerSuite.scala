@@ -274,4 +274,25 @@ class MapOutputTrackerSuite extends SparkFunSuite {
     }
   }
 
+  test("equally divide map statistics tasks") {
+    val func = newTrackerMaster().equallyDivide _
+    val cases = Seq((15, 5), (16, 5), (17, 5), (18, 5), (19, 5), (20, 5))
+    val expects = Seq(
+      Seq(3, 3, 3, 3, 3),
+      Seq(3, 3, 3, 3, 4),
+      Seq(3, 3, 3, 4, 4),
+      Seq(3, 3, 4, 4, 4),
+      Seq(3, 4, 4, 4, 4),
+      Seq(4, 4, 4, 4, 4))
+    cases.zip(expects).foreach { case ((num, divisor), expect) =>
+      val answer = func(num, divisor).toSeq
+      var wholeSplit = (0 until num)
+      answer.zip(expect).foreach { case (split, expectSplitLength) =>
+        val (currentSplit, rest) = wholeSplit.splitAt(expectSplitLength)
+        assert(currentSplit.toSet == split.toSet)
+        wholeSplit = rest
+      }
+    }
+  }
+
 }

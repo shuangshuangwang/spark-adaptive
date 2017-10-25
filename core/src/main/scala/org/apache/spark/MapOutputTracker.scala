@@ -374,6 +374,10 @@ private[spark] class MapOutputTrackerMaster(
     pool
   }
 
+  private val parallelism = conf.getInt("spark.adaptive.map.statistics.cores", 8)
+  private val threadPoolMapStats =
+    ThreadUtils.newDaemonFixedThreadPool(parallelism, "adaptive-map-statistics")
+
   // Make sure that we aren't going to exceed the max RPC message size by making sure
   // we use broadcast to send large map output statuses.
   if (minSizeForBroadcast > maxRpcMessageSize) {
@@ -489,6 +493,15 @@ private[spark] class MapOutputTrackerMaster(
   }
 
   /**
+   * Try to equally divide Range(0, num) to divisor slices
+   */
+  def equallyDivide(num: Int, divisor: Int): Iterator[Seq[Int]] = {
+    val (each, remain) = (num / divisor, num % divisor)
+    val (smaller, bigger) = (0 until num).splitAt((divisor-remain) * each)
+    smaller.grouped(each) ++ bigger.grouped(each + 1)
+  }
+
+  /**
    * Return statistics about all of the outputs for a given shuffle.
    */
   def getStatistics(dep: ShuffleDependency[_, _, _]): MapOutputStatistics = {
@@ -496,23 +509,19 @@ private[spark] class MapOutputTrackerMaster(
       val totalSizes = new Array[Long](dep.partitioner.numPartitions)
       val mapStatusSubmitTasks = ArrayBuffer[Future[_]]()
       val records = statuses(0).getRecordForBlock(0)
-      var parallelism = conf.getInt("spark.driver.cores", 8)
+      var taskSlices = parallelism
       // records != -1 means there is records number info
       if (records != -1) {
-        parallelism /= 2
+        taskSlices /= 2
       }
-      val threadPool = ThreadUtils.newDaemonFixedThreadPool(parallelism, "adaptive-map-statistics")
-      def divideRoundUp(num: Int, divisor: Int) = (num + divisor - 1) / divisor
 
-      (0 until totalSizes.length).grouped(divideRoundUp(totalSizes.length, parallelism)).foreach {
+      equallyDivide(totalSizes.length, taskSlices).foreach {
         reduceIds =>
-          mapStatusSubmitTasks += threadPool.submit(
+          mapStatusSubmitTasks += threadPoolMapStats.submit(
             new Runnable {
               override def run(): Unit = {
-                for (s <- statuses) {
-                  for (i <- reduceIds) {
-                    totalSizes(i) += s.getSizeForBlock(i)
-                  }
+                for (s <- statuses; i <- reduceIds) {
+                  totalSizes(i) += s.getSizeForBlock(i)
                 }
               }
             }
@@ -522,15 +531,13 @@ private[spark] class MapOutputTrackerMaster(
       var totalRecords = new Array[Long](0)
       if (records != -1) {
         totalRecords = new Array[Long](dep.partitioner.numPartitions)
-        (0 until totalRecords.length).grouped(divideRoundUp(totalRecords.length, parallelism))
-          .foreach { reduceIds =>
-            mapStatusSubmitTasks += threadPool.submit(
+        equallyDivide(totalSizes.length, taskSlices).foreach {
+          reduceIds =>
+            mapStatusSubmitTasks += threadPoolMapStats.submit(
               new Runnable {
                 override def run(): Unit = {
-                  for (s <- statuses) {
-                    for (i <- reduceIds) {
+                  for (s <- statuses; i <- reduceIds) {
                       totalRecords(i) += s.getRecordForBlock(i)
-                    }
                   }
                 }
               }
@@ -538,7 +545,6 @@ private[spark] class MapOutputTrackerMaster(
         }
       }
       mapStatusSubmitTasks.foreach(_.get())
-      threadPool.shutdown()
       new MapOutputStatistics(dep.shuffleId, totalSizes, totalRecords)
     }
   }
@@ -705,6 +711,7 @@ private[spark] class MapOutputTrackerMaster(
   override def stop() {
     mapOutputRequests.offer(PoisonPill)
     threadpool.shutdown()
+    threadPoolMapStats.shutdown()
     sendTracker(StopMapOutputTracker)
     trackerEndpoint = null
     shuffleStatuses.clear()
