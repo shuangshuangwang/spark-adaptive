@@ -401,7 +401,7 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
         case si: ShuffleQueryStageInput => si
       }
       assert(siAfterExecution.length === 1)
-      
+
       val stats = siAfterExecution.head.childStage.mapOutputStatistics
       assert(stats.recordsByPartitionId.isEmpty)
     }
