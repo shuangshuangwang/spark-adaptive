@@ -91,9 +91,9 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
     // reading them in local shuffle read.
     broadcastSidePlan match {
       case broadcast: ShuffleQueryStageInput
-        if broadcast.childStage.stats.partStatistics.isDefined =>
+        if broadcast.childStage.stats.recordStatistics.isDefined =>
           val (startIndicies, endIndicies) = calculatePartitionStartEndIndices(broadcast.childStage
-            .stats.partStatistics.get.rowsByPartitionId)
+            .stats.recordStatistics.get.recordsByPartitionId)
           childrenPlans.foreach {
             case input: ShuffleQueryStageInput =>
               input.partitionStartIndices = Some(startIndicies)

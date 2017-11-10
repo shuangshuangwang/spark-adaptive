@@ -55,7 +55,7 @@ object SizeInBytesOnlyStatsPlanVisitor extends SparkPlanVisitor[Statistics] {
   override def visitHashAggregateExec(p: HashAggregateExec): Statistics = {
     if (p.groupingExpressions.isEmpty) {
       val sizeInBytes = 8 + p.output.map(_.dataType.defaultSize).sum
-      Statistics(sizeInBytes, Some(1))
+      Statistics(sizeInBytes)
     } else {
       visitUnaryExecNode(p)
     }
@@ -76,13 +76,13 @@ object SizeInBytesOnlyStatsPlanVisitor extends SparkPlanVisitor[Statistics] {
       val sizeInBytes = p.mapOutputStatistics.bytesByPartitionId.sum
       val bytesByPartitionId = p.mapOutputStatistics.bytesByPartitionId
       if (p.mapOutputStatistics.recordsByPartitionId.nonEmpty) {
-        val rowCount = p.mapOutputStatistics.recordsByPartitionId.sum
-        val rowsByPartitionId = p.mapOutputStatistics.recordsByPartitionId
+        val record = p.mapOutputStatistics.recordsByPartitionId.sum
+        val recordsByPartitionId = p.mapOutputStatistics.recordsByPartitionId
         Statistics(sizeInBytes = sizeInBytes,
-          rowCount = Some(rowCount),
-          partStatistics = Some(PartitionStatistics(bytesByPartitionId, rowsByPartitionId)))
+          bytesByPartitionId = Some(bytesByPartitionId),
+          recordStatistics = Some(RecordStatistics(record, recordsByPartitionId)))
       } else {
-        Statistics(sizeInBytes = sizeInBytes)
+        Statistics(sizeInBytes = sizeInBytes, bytesByPartitionId = Some(bytesByPartitionId))
       }
     } else {
       visitUnaryExecNode(p)
@@ -92,7 +92,7 @@ object SizeInBytesOnlyStatsPlanVisitor extends SparkPlanVisitor[Statistics] {
   override def visitSortAggregateExec(p: SortAggregateExec): Statistics = {
     if (p.groupingExpressions.isEmpty) {
       val sizeInBytes = 8 + p.output.map(_.dataType.defaultSize).sum
-      Statistics(sizeInBytes, Some(1))
+      Statistics(sizeInBytes)
     } else {
       visitUnaryExecNode(p)
     }
@@ -113,16 +113,16 @@ object SizeInBytesOnlyStatsPlanVisitor extends SparkPlanVisitor[Statistics] {
       val sizeInBytes = p.mapOutputStatistics.bytesByPartitionId.sum
       val bytesByPartitionId = p.mapOutputStatistics.bytesByPartitionId
       if (p.mapOutputStatistics.recordsByPartitionId.nonEmpty) {
-        val rowCount = p.mapOutputStatistics.recordsByPartitionId.sum
-        val rowsByPartitionId = p.mapOutputStatistics.recordsByPartitionId
+        val record = p.mapOutputStatistics.recordsByPartitionId.sum
+        val recordsByPartitionId = p.mapOutputStatistics.recordsByPartitionId
         Statistics(sizeInBytes = sizeInBytes,
-          rowCount = Some(rowCount),
-          partStatistics = Some(PartitionStatistics(bytesByPartitionId, rowsByPartitionId)))
+          bytesByPartitionId = Some(bytesByPartitionId),
+          recordStatistics = Some(RecordStatistics(record, recordsByPartitionId)))
       } else {
-        Statistics(sizeInBytes = sizeInBytes)
+        Statistics(sizeInBytes = sizeInBytes, bytesByPartitionId = Some(bytesByPartitionId))
       }
     } else {
-      p.child.stats
+      visitUnaryExecNode(p)
     }
   }
 }
