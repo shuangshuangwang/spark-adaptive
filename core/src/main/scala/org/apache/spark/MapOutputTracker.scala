@@ -498,7 +498,11 @@ private[spark] class MapOutputTrackerMaster(
   def equallyDivide(num: Int, divisor: Int): Iterator[Seq[Int]] = {
     val (each, remain) = (num / divisor, num % divisor)
     val (smaller, bigger) = (0 until num).splitAt((divisor-remain) * each)
-    smaller.grouped(each) ++ bigger.grouped(each + 1)
+    if (each != 0) {
+      smaller.grouped(each) ++ bigger.grouped(each + 1)
+    } else {
+      bigger.grouped(each + 1)
+    }
   }
 
   /**

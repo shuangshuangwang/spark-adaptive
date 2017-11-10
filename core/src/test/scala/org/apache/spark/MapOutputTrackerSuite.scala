@@ -276,8 +276,9 @@ class MapOutputTrackerSuite extends SparkFunSuite {
 
   test("equally divide map statistics tasks") {
     val func = newTrackerMaster().equallyDivide _
-    val cases = Seq((15, 5), (16, 5), (17, 5), (18, 5), (19, 5), (20, 5))
+    val cases = Seq((4, 5), (15, 5), (16, 5), (17, 5), (18, 5), (19, 5), (20, 5))
     val expects = Seq(
+      Seq(1, 1, 1, 1, 0),
       Seq(3, 3, 3, 3, 3),
       Seq(3, 3, 3, 3, 4),
       Seq(3, 3, 3, 4, 4),
