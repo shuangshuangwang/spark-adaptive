@@ -51,12 +51,12 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
   }
 
   private[adaptive] def calculatePartitionStartEndIndices(
-      rowStatisticsByPartitionId: Array[Long]): (Array[Int], Array[Int]) = {
+      bytesByPartitionId: Array[Long]): (Array[Int], Array[Int]) = {
     val partitionStartIndices = ArrayBuffer[Int]()
     val partitionEndIndices = ArrayBuffer[Int]()
     var continuousZeroFlag = false
     var i = 0
-    for (rows <- rowStatisticsByPartitionId) {
+    for (rows <- bytesByPartitionId) {
       if (rows != 0 && !continuousZeroFlag) {
         partitionStartIndices += i
         continuousZeroFlag = true
@@ -91,9 +91,9 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
     // reading them in local shuffle read.
     broadcastSidePlan match {
       case broadcast: ShuffleQueryStageInput
-        if broadcast.childStage.stats.recordStatistics.isDefined =>
+        if broadcast.childStage.stats.bytesByPartitionId.isDefined =>
           val (startIndicies, endIndicies) = calculatePartitionStartEndIndices(broadcast.childStage
-            .stats.recordStatistics.get.recordsByPartitionId)
+            .stats.bytesByPartitionId.get)
           childrenPlans.foreach {
             case input: ShuffleQueryStageInput =>
               input.partitionStartIndices = Some(startIndicies)
