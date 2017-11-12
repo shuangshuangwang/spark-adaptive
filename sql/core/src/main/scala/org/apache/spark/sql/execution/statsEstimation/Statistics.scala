@@ -69,7 +69,7 @@ case class Statistics(
 
   def getPartitionStatistics : Option[PartitionStatistics] = {
     if (bytesByPartitionId.isDefined && recordStatistics.isDefined) {
-      Some(bytesByPartitionId.get, recordStatistics.get.recordsByPartitionId)
+      Some(PartitionStatistics(bytesByPartitionId.get, recordStatistics.get.recordsByPartitionId))
     } else {
       None
     }
