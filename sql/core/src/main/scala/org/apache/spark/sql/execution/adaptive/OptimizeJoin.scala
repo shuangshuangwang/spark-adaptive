@@ -56,11 +56,11 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
     val partitionEndIndices = ArrayBuffer[Int]()
     var continuousZeroFlag = false
     var i = 0
-    for (rows <- bytesByPartitionId) {
-      if (rows != 0 && !continuousZeroFlag) {
+    for (bytes <- bytesByPartitionId) {
+      if (bytes != 0 && !continuousZeroFlag) {
         partitionStartIndices += i
         continuousZeroFlag = true
-      } else if (rows == 0 && continuousZeroFlag) {
+      } else if (bytes == 0 && continuousZeroFlag) {
         partitionEndIndices += i
         continuousZeroFlag = false
       }
@@ -87,7 +87,7 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
         input.isLocalShuffle = true
       case _ =>
     }
-    // If there's shuffle write on broadcast side, then find the partitions with 0 rows and ignore
+    // If there's shuffle write on broadcast side, then find the partitions with 0 size and ignore
     // reading them in local shuffle read.
     broadcastSidePlan match {
       case broadcast: ShuffleQueryStageInput
