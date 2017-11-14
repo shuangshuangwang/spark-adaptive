@@ -43,7 +43,7 @@ case class HandleSkewedJoin(conf: SQLConf) extends Rule[SparkPlan] {
    * partition size * spark.sql.adaptive.skewedPartitionFactor and also larger than
    * spark.sql.adaptive.skewedPartitionSizeThreshold, or if its row count is larger than
    * the median row count * spark.sql.adaptive.skewedPartitionFactor and also larger than
-   * spark.sql.adaptive.skewedPartitionSizeThreshold.
+   * spark.sql.adaptive.skewedPartitionRowCountThreshold.
    */
   private def isSkewed(
       stats: PartitionStatistics,
@@ -84,7 +84,7 @@ case class HandleSkewedJoin(conf: SQLConf) extends Rule[SparkPlan] {
     (0 until numSplits).map(_ * numMapperInSplit).toArray
   }
 
-  private def isSupported(joinType: JoinType, left: QueryStageInput, right: QueryStageInput)
+  private def supportOptimization(joinType: JoinType, left: QueryStageInput, right: QueryStageInput)
       : Boolean = {
     (joinType == Inner || joinType == Cross || joinType == LeftSemi) &&
       left.childStage.stats.getPartitionStatistics.isDefined &&
@@ -96,7 +96,8 @@ case class HandleSkewedJoin(conf: SQLConf) extends Rule[SparkPlan] {
       queryStage: QueryStage): SparkPlan = operator.transformUp {
     case smj @ SortMergeJoinExec(leftKeys, rightKeys, joinType, condition,
       SortExec(_, _, left: ShuffleQueryStageInput, _),
-      SortExec(_, _, right: ShuffleQueryStageInput, _)) if isSupported(joinType, left, right) =>
+      SortExec(_, _, right: ShuffleQueryStageInput, _))
+      if supportOptimization(joinType, left, right) =>
 
       val leftStats = left.childStage.stats.getPartitionStatistics.get
       val rightStats = right.childStage.stats.getPartitionStatistics.get

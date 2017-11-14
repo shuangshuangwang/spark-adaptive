@@ -229,7 +229,7 @@ object SQLConf {
       "multiple the median partition size and also larger than " +
       "spark.sql.adaptive.skewedPartitionSizeThreshold, or if its row count is larger than this " +
       "factor multiple the median row count and also larger than " +
-      "spark.sql.adaptive.skewedPartitionSizeThreshold.")
+      "spark.sql.adaptive.skewedPartitionRowCountThreshold.")
     .intConf
     .createWithDefault(10)
 
