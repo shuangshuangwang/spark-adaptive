@@ -18,16 +18,19 @@
 package org.apache.spark
 
 import java.io._
-import java.util.concurrent._
+import java.util.concurrent.{ConcurrentHashMap, LinkedBlockingQueue, ThreadPoolExecutor}
 import java.util.zip.{GZIPInputStream, GZIPOutputStream}
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable.{ArrayBuffer, HashMap, HashSet, Map}
+import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.duration.Duration
 import scala.reflect.ClassTag
 import scala.util.control.NonFatal
 
 import org.apache.spark.broadcast.{Broadcast, BroadcastManager}
 import org.apache.spark.internal.Logging
+import org.apache.spark.internal.config._
 import org.apache.spark.rpc.{RpcCallContext, RpcEndpoint, RpcEndpointRef, RpcEnv}
 import org.apache.spark.scheduler.{ExecutorCacheTaskLocation, MapStatus}
 import org.apache.spark.shuffle.MetadataFetchFailedException
@@ -493,16 +496,31 @@ private[spark] class MapOutputTrackerMaster(
   }
 
   /**
-   * Try to equally divide Range(0, num) to divisor slices
+   * Grouped function of Range, this is to avoid traverse of all elements of Range using
+   * IterableLike's grouped function.
    */
-  def equallyDivide(num: Int, divisor: Int): Iterator[Seq[Int]] = {
-    assert(divisor > 0, "Divisor should be positive")
-    val (each, remain) = (num / divisor, num % divisor)
-    val (smaller, bigger) = (0 until num).splitAt((divisor-remain) * each)
-    if (each != 0) {
-      smaller.grouped(each) ++ bigger.grouped(each + 1)
+  def rangeGrouped(range: Range, size: Int): Seq[Range] = {
+    val start = range.start
+    val step = range.step
+    val end = range.end
+    for (i <- start.until(end, size * step)) yield {
+      i.until(i + size * step, step)
+    }
+  }
+
+  /**
+   * To equally divide n elements into m buckets, basically each bucket should have n/m elements,
+   * for the remaining n%m elements, add one more element to the first n%m buckets each.
+   */
+  def equallyDivide(numElements: Int, numBuckets: Int): Seq[Seq[Int]] = {
+    val elementsPerBucket = numElements / numBuckets
+    val remaining = numElements % numBuckets
+    val splitPoint = (elementsPerBucket + 1) * remaining
+    if (elementsPerBucket == 0) {
+      rangeGrouped(0.until(splitPoint), elementsPerBucket + 1)
     } else {
-      bigger.grouped(each + 1)
+      rangeGrouped(0.until(splitPoint), elementsPerBucket + 1) ++
+        rangeGrouped(splitPoint.until(numElements), elementsPerBucket)
     }
   }
 
@@ -512,44 +530,63 @@ private[spark] class MapOutputTrackerMaster(
   def getStatistics(dep: ShuffleDependency[_, _, _]): MapOutputStatistics = {
     shuffleStatuses(dep.shuffleId).withMapStatuses { statuses =>
       val totalSizes = new Array[Long](dep.partitioner.numPartitions)
-      val mapStatusSubmitTasks = ArrayBuffer[Future[_]]()
-      val records = statuses(0).getRecordForBlock(0)
-      var taskSlices = parallelism
-      // records != -1 means there is records number info
-      if (records != -1) {
-        taskSlices /= 2
-      }
+      var totalRecords = new Array[Long](0)
 
-      equallyDivide(totalSizes.length, taskSlices).foreach {
-        reduceIds =>
-          mapStatusSubmitTasks += threadPoolMapStats.submit(
-            new Runnable {
-              override def run(): Unit = {
+      val parallelAggThreshold = conf.get(
+        SHUFFLE_MAP_OUTPUT_PARALLEL_AGGREGATION_THRESHOLD)
+      var parallelism = math.min(
+        Runtime.getRuntime.availableProcessors(),
+        statuses.length.toLong * totalSizes.length / parallelAggThreshold + 1).toInt
+
+      val records = statuses(0).getRecordForBlock(0)
+
+      if (parallelism <= 1) {
+        for (s <- statuses) {
+          for (i <- 0 until totalSizes.length) {
+            totalSizes(i) += s.getSizeForBlock(i)
+          }
+        }
+        // records != -1 means there is records number info
+        if (records != -1) {
+          totalRecords = new Array[Long](dep.partitioner.numPartitions)
+          for (s <- statuses) {
+            for (i <- 0 until totalRecords.length) {
+              totalRecords(i) += s.getRecordForBlock(i)
+            }
+          }
+        }
+      } else {
+        // records != -1 means there is records number info
+        val (sizeParallelism, recordParallelism) = if (records != -1) {
+          (parallelism / 2, parallelism - parallelism / 2)
+        } else {
+          (parallelism, 0)
+        }
+        val threadPool = ThreadUtils.newDaemonFixedThreadPool(parallelism, "map-output-aggregate")
+        try {
+          implicit val executionContext = ExecutionContext.fromExecutor(threadPool)
+          var mapStatusSubmitTasks = equallyDivide(totalSizes.length, sizeParallelism).map {
+            reduceIds => Future {
+              for (s <- statuses; i <- reduceIds) {
+                totalSizes(i) += s.getSizeForBlock(i)
+              }
+            }
+          }
+          if (records != -1) {
+            totalRecords = new Array[Long](dep.partitioner.numPartitions)
+            mapStatusSubmitTasks ++= equallyDivide(totalRecords.length, recordParallelism).map {
+              reduceIds => Future {
                 for (s <- statuses; i <- reduceIds) {
-                  totalSizes(i) += s.getSizeForBlock(i)
+                  totalRecords(i) += s.getRecordForBlock(i)
                 }
               }
             }
-          )
-      }
-
-      var totalRecords = new Array[Long](0)
-      if (records != -1) {
-        totalRecords = new Array[Long](dep.partitioner.numPartitions)
-        equallyDivide(totalSizes.length, taskSlices).foreach {
-          reduceIds =>
-            mapStatusSubmitTasks += threadPoolMapStats.submit(
-              new Runnable {
-                override def run(): Unit = {
-                  for (s <- statuses; i <- reduceIds) {
-                      totalRecords(i) += s.getRecordForBlock(i)
-                  }
-                }
-              }
-            )
+          }
+          ThreadUtils.awaitResult(Future.sequence(mapStatusSubmitTasks), Duration.Inf)
+        } finally {
+          threadPool.shutdown()
         }
       }
-      mapStatusSubmitTasks.foreach(_.get())
       new MapOutputStatistics(dep.shuffleId, totalSizes, totalRecords)
     }
   }
