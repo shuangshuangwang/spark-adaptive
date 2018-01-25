@@ -28,7 +28,9 @@ import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.statsEstimation.Statistics
 
 /**
- * QueryStageInput is the leaf node of a QueryStage and is used to hide its child stage.
+ * QueryStageInput is the leaf node of a QueryStage and is used to hide its child stage. It gets
+ * the result of its child stage and serves it as the input of the QueryStage. A QueryStage knows
+ * its child stages by collecting all the QueryStageInputs.
  */
 abstract class QueryStageInput extends LeafExecNode {
 
@@ -37,8 +39,9 @@ abstract class QueryStageInput extends LeafExecNode {
   // Ignore this wrapper for canonicalizing.
   override lazy val canonicalized: SparkPlan = childStage.canonicalized
 
-  // `QueryStageInput` can have distinct set of output attribute ids from its childStage, we need
-  // to update the attribute ids in `outputPartitioning` and `outputOrdering`.
+  // Similar to ReusedExchangeExec, two QueryStageInputs can reference to the same childStage.
+  // QueryStageInput can have distinct set of output attribute ids from its childStage, we need
+  // to update the attribute ids in outputPartitioning and outputOrdering.
   private lazy val updateAttr: Expression => Expression = {
     val originalAttrToNewAttr = AttributeMap(childStage.output.zip(output))
     e => e.transform {

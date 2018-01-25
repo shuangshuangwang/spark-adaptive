@@ -33,7 +33,7 @@ import org.apache.spark.util.ThreadUtils
 
 /**
  * In adaptive execution mode, an execution plan is divided into multiple QueryStages. Each
- * QueryStage is a sub tree that runs in a single stage.
+ * QueryStage is a sub-tree that runs in a single stage.
  */
 abstract class QueryStage extends UnaryExecNode {
 
@@ -115,13 +115,10 @@ abstract class QueryStage extends UnaryExecNode {
       .filter(_ != null).toArray
     if (childMapOutputStatistics.length > 0) {
 
-      val minNumPostShufflePartitions =
-        if (conf.minNumPostShufflePartitions > 0) Some(conf.minNumPostShufflePartitions) else None
-
       val exchangeCoordinator = new ExchangeCoordinator(
         conf.targetPostShuffleInputSize,
         conf.adaptiveTargetPostShuffleRowCount,
-        minNumPostShufflePartitions)
+        conf.minNumPostShufflePartitions)
 
       if (queryStageInputs.length == 2 && queryStageInputs.forall(_.skewedPartitions.isDefined)) {
         // If a skewed join is detected and optimized, we will omit the skewed partitions when

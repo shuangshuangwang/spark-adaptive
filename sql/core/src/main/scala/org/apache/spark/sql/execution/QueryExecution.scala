@@ -117,9 +117,10 @@ class QueryExecution(val sparkSession: SparkSession, val logical: LogicalPlan) {
     python.ExtractPythonUDFs,
     PlanSubqueries(sparkSession),
     EnsureRequirements(sparkSession.sessionState.conf),
-    // ReuseSubquery should be put before PlanQueryStage due to inserting QueryStageInput as
-    // LeafExecNode will break the original tree structure
     ReuseSubquery(sparkSession.sessionState.conf),
+    // PlanQueryStage needs to be the last rule because it divides the plan into multiple sub-trees
+    // by inserting leaf node QueryStageInput. Transforming the plan after applying this rule will
+    // only transform node in a sub-tree.
     PlanQueryStage(sparkSession.sessionState.conf))
 
   protected def stringOrError[A](f: => A): String =
