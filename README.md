@@ -1,11 +1,11 @@
 # Spark SQL Adaptive Execution
 
-There are three main features in Adaptive Execution, including auto setting the shuffle partition number, optimizing join strategy at runtime and handling skewed join. These features can be enabled seperately. To start with Adaptive Exection, please build branch AdaptiveJoin3 and at least set `spark.sql.adaptive.enabled` to true.
+There are three main features in Adaptive Execution, including auto setting the shuffle partition number, optimizing join strategy at runtime and handling skewed join. These features can be enabled separately. To start with Adaptive Exection, please build branch AdaptiveJoin3 and at least set `spark.sql.adaptive.enabled` to true.
 
 An Engilish version design doc is available on [google doc](https://docs.google.com/document/d/1mpVjvQZRAkD-Ggy6-hcjXtBPiQoVbZGe3dLnAKgtJ4k/edit). A Chinese version blog is available on [CSDN](https://mp.weixin.qq.com/s?__biz=MzA4Mzc0NjkwNA==&mid=2650784030&idx=1&sn=2c61e166b535199ee53e579a5092ff80&chksm=87faa829b08d213f55dab289bf5a12cfe376be0c944e03279a1c93e0f0d2164f1c6a6c7c880a&mpshare=1&scene=1&srcid=0111fEEzMCuhKozD4hsN4EE5&pass_ticket=WwOAQGxxBX9z63UyuFIXnWVm%2FSJhHkYwdsKplVDbaiA66ueqnDOtzgq86NgTgqvt#rd) that introduces the features and benchmark results. [SPARK-23128](https://issues.apache.org/jira/browse/SPARK-23128) is the Jira for contributing this work to Apache Spark.
 
 
-## Auto Setting The Shuffle Partition Number.
+## Auto Setting The Shuffle Partition Number
 <table class="table">
 <tr><th>Property Name</th><th>Default</th><th>Meaning</th></tr>
 <tr>
