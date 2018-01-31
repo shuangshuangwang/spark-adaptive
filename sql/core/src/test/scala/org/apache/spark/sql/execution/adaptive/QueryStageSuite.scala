@@ -52,7 +52,7 @@ class QueryStageSuite extends SparkFunSuite with BeforeAndAfterAll {
       .config("spark.ui.enabled", "false")
       .config("spark.driver.allowMultipleContexts", "true")
       .config(config.SHUFFLE_STATISTICS_VERBOSE.key, "true")
-      .config(SQLConf.SHUFFLE_PARTITIONS.key, "5")
+      .config(SQLConf.SHUFFLE_MAX_NUM_POSTSHUFFLE_PARTITIONS.key, "5")
       .config(SQLConf.ADAPTIVE_EXECUTION_ENABLED.key, "true")
       .config(SQLConf.AUTO_BROADCASTJOIN_THRESHOLD.key, "-1")
       .config(SQLConf.ADAPTIVE_BROADCASTJOIN_THRESHOLD.key, "12000")
