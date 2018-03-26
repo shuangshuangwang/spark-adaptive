@@ -148,7 +148,11 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
             case BuildRight => (removeSort(right))
           }
           // Local shuffle read less partitions based on broadcastSide's row statistics
-          optimizeForLocalShuffleReadLessPartitions(broadcastSidePlan, broadcastJoin.children)
+          joinType match {
+            case _: InnerLike =>
+              optimizeForLocalShuffleReadLessPartitions(broadcastSidePlan, broadcastJoin.children)
+            case _ =>
+          }
 
           // Apply EnsureRequirement rule to check if any new Exchange will be added. If the added
           // Exchange number less than spark.sql.adaptive.maxAdditionalShuffleNum, we convert the
@@ -169,7 +173,11 @@ case class OptimizeJoin(conf: SQLConf) extends Rule[SparkPlan] {
           } else {
             logWarning("Join optimization not applied due to the number of added exchanges" +
               " introduced is larger than spark.sql.adaptive.maxAdditionalShuffleNum")
-            revertShuffleReadChanges(broadcastJoin.children)
+            joinType match {
+              case _: InnerLike =>
+                revertShuffleReadChanges(broadcastJoin.children)
+              case _ =>
+            }
             smj
           }
         }.getOrElse(smj)
